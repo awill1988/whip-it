@@ -1,0 +1,37 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "spawn_agent|subagent|agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "whip-it --client codex --event PreToolUse"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "whip-it --client codex --event UserPromptSubmit"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "spawn_agent|subagent|agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "whip-it --client codex --event PostToolUse"
+          }
+        ]
+      }
+    ]
+  }
+}

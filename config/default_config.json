@@ -1,0 +1,23 @@
+{
+  "mode": "enforce",
+  "default_max_subagents": 0,
+  "auto_clamp": false,
+  "strict_prompt_override": true,
+  "timeout_seconds": 5,
+  "tool_mappings": {
+    "antigravity": [
+      "invoke_subagent",
+      "define_subagent"
+    ],
+    "claude": [
+      "Agent",
+      "Task"
+    ],
+    "codex": [
+      "spawn_agent",
+      "subagent",
+      "agent"
+    ]
+  },
+  "custom_redirection_message": null
+}

@@ -1,0 +1,32 @@
+{
+  "whip-it": {
+    "PreToolUse": [
+      {
+        "matcher": "invoke_subagent|define_subagent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "whip-it --client antigravity --event PreToolUse"
+          }
+        ]
+      }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "whip-it --client antigravity --event PreInvocation"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "invoke_subagent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "whip-it --client antigravity --event PostToolUse"
+          }
+        ]
+      }
+    ]
+  }
+}
