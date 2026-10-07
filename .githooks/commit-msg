@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+
+python3 tools/commit_check/commit_check.py --edit "$1"

@@ -7,8 +7,44 @@ on:
     branches: [ main ]
 
 jobs:
+  commit_lint:
+    name: Conventional Commit Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run commit checker test suite
+        run: |
+          python3 tools/commit_check/test_commit_check.py
+
+      - name: Lint pull request commits and title
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          python3 tools/commit_check/commit_check.py --range "$BASE_SHA" "$HEAD_SHA"
+          printf '%s\n' "$PR_TITLE" | python3 tools/commit_check/commit_check.py
+
+      - name: Lint new branch commits
+        if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          python3 tools/commit_check/commit_check.py --range "$BEFORE_SHA" HEAD
+
   test:
     name: Test (Python ${{ matrix.python-version }})
+    needs: [ commit_lint ]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -33,6 +69,7 @@ jobs:
         run: |
           poetry run python -m unittest discover -s tests -p "test_*.py" -v
           poetry run python -m unittest discover -s tools/adversarial_reviewer -p "test_*.py" -v
+          python3 tools/commit_check/test_commit_check.py
 
       - name: Run simulated hook integrations
         run: |

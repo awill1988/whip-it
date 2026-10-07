@@ -286,6 +286,18 @@ poetry build
 
 ---
 
+## Contributing
+
+Contributions are welcome! Please review [`CONTRIBUTING.md`](CONTRIBUTING.md) for details on our issue-first workflow, maintainer commitments, design constraints, and commit standards.
+
+To activate the repository git hooks locally:
+```bash
+git config core.hooksPath .githooks
+```
+
+---
+
 ## License
 
 MIT License. Copyright (c) 2026 Adam Williams.
+
