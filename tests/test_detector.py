@@ -62,7 +62,7 @@ class TestPromptDetector(unittest.TestCase):
                 res = analyze_prompt(phrase)
                 self.assertTrue(res.subagents_allowed)
                 self.assertEqual(res.max_subagents, expected_quota)
-                self.assertEqual(res.force_simplify, expected_quota <= 1)
+                self.assertEqual(res.force_simplify, expected_quota == 0)
                 self.assertIsNotNone(res.detected_phrase)
 
 

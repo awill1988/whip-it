@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "awill1988",
+  "version": "0.1.0",
+  "owner": {
+    "name": "Adam Williams",
+    "url": "https://github.com/awill1988"
+  },
+  "metadata": {
+    "description": "Developer infrastructure, agent planning guardrails, and quality hooks"
+  },
+  "plugins": [
+    {
+      "name": "whip-it",
+      "description": "Agent-planning guardrail and simplification hook for Claude Code, Antigravity, and Codex",
+      "version": "0.1.0",
+      "source": {
+        "source": "git",
+        "url": "https://github.com/awill1988/whip-it.git"
+      }
+    }
+  ]
+}

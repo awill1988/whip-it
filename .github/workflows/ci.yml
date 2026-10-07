@@ -32,6 +32,15 @@ jobs:
       - name: Run unit test suite
         run: |
           poetry run python -m unittest discover -s tests -p "test_*.py" -v
+          poetry run python -m unittest discover -s tools/adversarial_reviewer -p "test_*.py" -v
+
+      - name: Run simulated hook integrations
+        run: |
+          poetry run python scripts/whip_it.py test-prompt "Refactor parser, keep it simple, no subagents"
+          poetry run python scripts/whip_it.py status
+          echo '{"toolCall":{"name":"invoke_subagent","args":{"Subagents":[{"Role":"W"}]}},"conversationId":"ci-test"}' | poetry run python scripts/whip_it.py --client antigravity --event PreToolUse
+          echo '{"tool_name":"Agent","tool_input":{"prompt":"do it"},"session_id":"ci-test"}' | poetry run python scripts/whip_it.py --client claude --event PreToolUse
+          echo '{"tool_name":"spawn_agent","tool_input":{},"session_id":"ci-test"}' | poetry run python scripts/whip_it.py --client codex --event PreToolUse
 
   lint-and-validate:
     name: Lint & Schema Validation

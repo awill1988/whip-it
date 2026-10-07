@@ -103,7 +103,7 @@ def analyze_prompt(prompt: str) -> PromptLimits:
             return PromptLimits(
                 subagents_allowed=quota > 0,
                 max_subagents=quota,
-                force_simplify=quota <= 1,
+                force_simplify=quota == 0,
                 detected_phrase=match.group(0),
             )
 
