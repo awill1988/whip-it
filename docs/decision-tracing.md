@@ -108,7 +108,7 @@ quota or a measured forecast of future expenditure.
 python scripts/benchmark_hooks.py \
   --executable /path/to/venv/bin/whip-it \
   --python /path/to/venv/bin/python \
-  --samples 30
+  --samples 30 --diagnostics
 ```
 
 The benchmark uses isolated state/configuration and synthetic inputs, discards
