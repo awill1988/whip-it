@@ -30,6 +30,10 @@ class TestAdversarialReviewer(unittest.TestCase):
             (0, "DISPOSITION: APPROVE"),
             (0, "no issues"),
             (0, "DISPOSITION: APPROVE\nDISPOSITION: COMMENT"),
+            (0, '{"disposition":"APPROVE","rationale":""}'),
+            (0, '{"disposition":"APPROVE","rationale":"checked","extra":true}'),
+            (0, "[]"),
+            (0, '{"disposition":"APPROVE","rationale":true}'),
         ):
             with (
                 self.subTest(status=status, output=output),
@@ -50,7 +54,7 @@ class TestAdversarialReviewer(unittest.TestCase):
             return_value=subprocess.CompletedProcess(
                 [],
                 0,
-                "the changed branch preserves the existing limit check.\nDISPOSITION: APPROVE",
+                '{"disposition":"APPROVE","rationale":"the changed branch preserves the existing limit check."}',
                 "",
             ),
         ):
