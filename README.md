@@ -1,6 +1,6 @@
 # whip-it!
 
-> *“When a problem comes along, you must whip it!”*
+> *"When a problem comes along, you must whip it! When something's going wrong, you must whip it!"*
 
 **Share the skill. Try the plugin. Keep enough budget for the rest of your work.**
 
