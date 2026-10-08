@@ -28,7 +28,7 @@ def attributes(stderr):
     }
 
 
-def verify(executable):
+def verify(executable, diagnostics=False):
     checked = 0
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -42,7 +42,7 @@ def verify(executable):
         base_env.update(
             WHIP_IT_CONFIG_DIR=str(root),
             WHIP_IT_CACHE_DIR=str(root / "cache"),
-            WHIP_IT_TRACE="otlp_json",
+            WHIP_IT_TRACE="otlp_json" if diagnostics else "",
         )
         traces = []
 
@@ -66,14 +66,12 @@ def verify(executable):
             assert (json.loads(first.stdout) if first.stdout else None) == (
                 json.loads(second.stdout) if second.stdout else None
             ), (client, event, first.stdout, second.stdout)
-            assert attributes(first.stderr) == attributes(second.stderr), (
-                client,
-                event,
-                attributes(first.stderr),
-                attributes(second.stderr),
-            )
-            assert "private-content" not in second.stderr
-            traces.append(json.loads(second.stderr))
+            if diagnostics:
+                assert attributes(first.stderr) == attributes(second.stderr)
+                assert "private-content" not in second.stderr
+                traces.append(json.loads(second.stderr))
+            else:
+                assert first.stderr == second.stderr == "", (first.stderr, second.stderr)
             checked += 1
 
         for client, tool in (
@@ -189,53 +187,57 @@ def verify(executable):
         compare(["invalid"])
         compare({"tool_name": "shell_command"})
 
-        for index, (consumed, callbacks, mode) in enumerate(
-            (
-                (39999, 0, "enforce"),
-                (40000, 0, "enforce"),
-                (80000, 0, "enforce"),
-                (40000, 1, "enforce"),
-                (40000, 0, "advisory"),
+        expected = {"records": 0}
+        if diagnostics:
+            for index, (consumed, callbacks, mode) in enumerate(
+                (
+                    (39999, 0, "enforce"),
+                    (40000, 0, "enforce"),
+                    (80000, 0, "enforce"),
+                    (40000, 1, "enforce"),
+                    (40000, 0, "advisory"),
+                )
+            ):
+                trace = DecisionTrace("codex", "Stop", schema_version=1, policy_version=1)
+                trace.record = decide_plan(
+                    PlanInputs(consumed, 10000, 100000, 1, 0, callbacks, mode)
+                )
+                traces.append(trace.envelope())
+            trace_path = root / "traces.jsonl"
+            trace_path.write_text("".join(json.dumps(trace) + "\n" for trace in traces))
+            expected, status = evaluate_file(trace_path)
+            assert status == 0, expected
+            result = subprocess.run(
+                native + ["evaluate", str(trace_path)],
+                text=True,
+                capture_output=True,
+                check=True,
+                cwd=root,
+                env=base_env,
             )
-        ):
-            trace = DecisionTrace("codex", "Stop", schema_version=1, policy_version=1)
-            trace.record = decide_plan(PlanInputs(consumed, 10000, 100000, 1, 0, callbacks, mode))
-            traces.append(trace.envelope())
-        trace_path = root / "traces.jsonl"
-        trace_path.write_text("".join(json.dumps(trace) + "\n" for trace in traces))
-        expected, status = evaluate_file(trace_path)
-        assert status == 0, expected
-        result = subprocess.run(
-            native + ["evaluate", str(trace_path)],
-            text=True,
-            capture_output=True,
-            check=True,
-            cwd=root,
-            env=base_env,
-        )
-        assert json.loads(result.stdout) == expected, result.stdout
-        traces[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"].append(
-            {"key": "whipit.signal.context.action", "value": {"stringValue": "deny"}}
-        )
-        trace_path.write_text(json.dumps(traces[0]) + "\n")
-        result = subprocess.run(
-            native + ["evaluate", str(trace_path)],
-            text=True,
-            capture_output=True,
-            cwd=root,
-            env=base_env,
-        )
-        assert result.returncode == 1 and json.loads(result.stdout)["mismatches"] == 1
+            assert json.loads(result.stdout) == expected, result.stdout
+            traces[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"].append(
+                {"key": "whipit.signal.context.action", "value": {"stringValue": "deny"}}
+            )
+            trace_path.write_text(json.dumps(traces[0]) + "\n")
+            result = subprocess.run(
+                native + ["evaluate", str(trace_path)],
+                text=True,
+                capture_output=True,
+                cwd=root,
+                env=base_env,
+            )
+            assert result.returncode == 1 and json.loads(result.stdout)["mismatches"] == 1
 
-        trace_path.write_text("not json\n")
-        result = subprocess.run(
-            native + ["evaluate", str(trace_path)],
-            text=True,
-            capture_output=True,
-            cwd=root,
-            env=base_env,
-        )
-        assert result.returncode == 1 and json.loads(result.stdout)["invalid"] == 1
+            trace_path.write_text("not json\n")
+            result = subprocess.run(
+                native + ["evaluate", str(trace_path)],
+                text=True,
+                capture_output=True,
+                cwd=root,
+                env=base_env,
+            )
+            assert result.returncode == 1 and json.loads(result.stdout)["invalid"] == 1
 
         model_path = root / "model.json"
         model_path.write_text(
@@ -317,5 +319,6 @@ def verify(executable):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--executable", type=Path, required=True)
+    parser.add_argument("--diagnostics", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(verify(args.executable.resolve()), indent=2))
+    print(json.dumps(verify(args.executable.resolve(), args.diagnostics), indent=2))

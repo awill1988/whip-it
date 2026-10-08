@@ -43,25 +43,41 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools
+          sudo apt-get install -y musl-tools strace
           echo 'RUSTFLAGS=-C linker=musl-gcc' >> "$GITHUB_ENV"
       - name: format and lint
         run: |
           cargo fmt --check
-          cargo clippy --locked --all-targets --target ${{ matrix.target }} -- -D warnings
+          cargo clippy --locked --all-targets --no-default-features --target ${{ matrix.target }} -- -D warnings
+          cargo clippy --locked --all-targets --features diagnostics --target ${{ matrix.target }} -- -D warnings
       - name: test and build
         run: |
           python -m unittest tests.test_state
-          cargo test --locked --target ${{ matrix.target }}
-          cargo build --locked --release --target ${{ matrix.target }}
+          cargo test --locked --no-default-features --target ${{ matrix.target }}
+          cargo test --locked --features diagnostics --target ${{ matrix.target }}
+          cargo build --locked --release --no-default-features --target ${{ matrix.target }}
+          cargo build --locked --release --features diagnostics --target-dir target/diagnostics --target ${{ matrix.target }}
       - name: verify and package
         shell: bash
         run: |
           binary="target/${{ matrix.target }}/release/whip-it"
           if [ "$RUNNER_OS" = Windows ]; then binary="$binary.exe"; fi
           python scripts/verify_native.py --executable "$binary"
-          python scripts/verify_observations.py --executable "$binary"
+          diagnostic="target/diagnostics/${{ matrix.target }}/release/whip-it"
+          if [ "$RUNNER_OS" = Windows ]; then diagnostic="$diagnostic.exe"; fi
+          python scripts/verify_native.py --executable "$diagnostic" --diagnostics
+          python scripts/verify_observations.py --executable "$diagnostic"
+          audit=()
+          if [ "$RUNNER_OS" = Linux ]; then audit=(--network-audit); fi
+          python scripts/verify_release.py --executable "$binary" --depfile "target/${{ matrix.target }}/release/whip-it.d" "${audit[@]}"
+          python benchmarks/run.py --executable "$binary" --samples 100 --observations --output "dist/benchmarks/${{ matrix.target }}.json"
+          python examples/run.py --executable "$binary"
           python scripts/package_native.py --binary "$binary" --target "${{ matrix.target }}" --output dist/native
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ matrix.target }}
+          path: dist/benchmarks/*
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: whip-it-${{ matrix.target }}

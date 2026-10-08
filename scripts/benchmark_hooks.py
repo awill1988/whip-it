@@ -1,6 +1,9 @@
 """Measure installed hook process wall time with isolated, synthetic inputs."""
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
+import hashlib
+import platform
 from datetime import datetime, timezone
 import json
 import math
@@ -19,7 +22,10 @@ def main():
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--samples", type=int, default=30)
     parser.add_argument("--observations", action="store_true")
+    parser.add_argument("--diagnostics", action="store_true")
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
+    args.executable = str(Path(args.executable).resolve())
     if args.samples < 2:
         parser.error("samples must be at least two")
     results = {}
@@ -77,6 +83,18 @@ def main():
             WHIP_IT_CONFIG_DIR=root,
             WHIP_IT_CACHE_DIR=str(directory / "cache"),
         )
+        status = subprocess.run(
+            [args.executable, "status"],
+            env=env,
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        capabilities = json.loads(status.stdout)
+        if capabilities.get("runtime") == "rust":
+            assert capabilities["diagnostics"] == args.diagnostics, "benchmark build mismatch"
         cases = [("interpreter", [args.python, "-c", "pass"], {}, env)]
         if args.observations:
             metadata = {
@@ -100,7 +118,7 @@ def main():
                 check=True,
             )
             cases.append(("observe", ingest, metadata, env))
-            for traced in (False, True):
+            for traced in (False, True) if args.diagnostics else (False,):
                 cases.append(
                     (
                         "snapshot_plan" + ("_traced" if traced else ""),
@@ -113,7 +131,7 @@ def main():
                         dict(env, WHIP_IT_TRACE="otlp_json" if traced else "off"),
                     )
                 )
-        for traced in (False, True):
+        for traced in (False, True) if args.diagnostics else (False,):
             for name, event, payload in scenarios:
                 case_env = dict(
                     env,
@@ -136,10 +154,29 @@ def main():
                         case_env,
                     )
                 )
+        hook_command = [args.executable, "--client", "codex", "--event", "Stop"]
+        cases.extend(
+            [
+                ("malformed", hook_command, ["invalid"], env),
+                (
+                    "missing_metadata",
+                    hook_command,
+                    {
+                        "permission_mode": "plan",
+                        "last_assistant_message": "<proposed_plan>synthetic</proposed_plan>",
+                    },
+                    env,
+                ),
+            ]
+        )
         for name, command, payload, case_env in cases:
             samples = []
             for sample in range(args.samples + 1):
-                message = {"session_id": f"{name}-{sample}", **payload}
+                message = (
+                    {"session_id": f"{name}-{sample}", **payload}
+                    if isinstance(payload, dict)
+                    else payload
+                )
                 start = time.perf_counter_ns()
                 result = subprocess.run(
                     command,
@@ -152,7 +189,17 @@ def main():
                     timeout=10,
                 )
                 elapsed = (time.perf_counter_ns() - start) / 1_000_000
-                if name.startswith(("unrelated", "allowed", "prompt", "snapshot", "observe")):
+                if name.startswith(
+                    (
+                        "malformed",
+                        "missing_metadata",
+                        "unrelated",
+                        "allowed",
+                        "prompt",
+                        "snapshot",
+                        "observe",
+                    )
+                ):
                     assert result.stdout == "", (name, result.stdout)
                 elif name.startswith("denied"):
                     assert (
@@ -161,13 +208,90 @@ def main():
                     )
                 elif name.startswith("plan"):
                     assert result.stdout == "", (name, result.stdout)
+                if not args.diagnostics:
+                    assert "resourceSpans" not in result.stderr
                 if sample:
                     samples.append(elapsed)
+                else:
+                    first_ms = elapsed
             results[name] = {
+                "samples_ms": samples,
+                "first_ms": round(first_ms, 3),
+                "max_ms": round(max(samples), 3),
                 "median_ms": round(statistics.median(samples), 3),
                 "p95_ms": round(sorted(samples)[math.ceil(len(samples) * 0.95) - 1], 3),
             }
-    print(json.dumps({"samples": args.samples, "results": results}, indent=2))
+
+        def contention(index):
+            command = [args.executable, "--client", "codex", "--event", "PreToolUse"]
+            return subprocess.run(
+                command,
+                input=json.dumps(
+                    {"session_id": f"contention-{index // 8}", "tool_name": "spawn_agent"}
+                ),
+                text=True,
+                capture_output=True,
+                check=True,
+                timeout=10,
+                cwd=root,
+                env=dict(env, WHIP_IT_MAX_SUBAGENTS="2"),
+            )
+
+        contention_samples = []
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for batch in range(20):
+                started = time.perf_counter_ns()
+                outcomes = list(pool.map(contention, range(batch * 8, (batch + 1) * 8)))
+                assert sum(not result.stdout for result in outcomes) == 2
+                contention_samples.append((time.perf_counter_ns() - started) / 1_000_000)
+
+    def version(command):
+        return subprocess.check_output(command, text=True).strip()
+
+    processor = platform.processor()
+    if platform.system() == "Darwin":
+        processor = version(["sysctl", "-n", "machdep.cpu.brand_string"])
+    elif platform.system() == "Windows":
+        processor = os.environ.get("PROCESSOR_IDENTIFIER", processor)
+    elif Path("/proc/cpuinfo").exists():
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.startswith("model name"):
+                processor = line.partition(":")[2].strip()
+                break
+    report = {
+        "samples": args.samples,
+        "warmup_per_case": 1,
+        "os": platform.platform(),
+        "architecture": platform.machine(),
+        "processor": processor,
+        "logical_cpus": os.cpu_count(),
+        "rustc": version(["rustc", "--version"]),
+        "commit": version(
+            ["git", "-C", str(Path(__file__).resolve().parents[1]), "rev-parse", "HEAD"]
+        ),
+        "working_tree_dirty": bool(
+            version(
+                ["git", "-C", str(Path(__file__).resolve().parents[1]), "status", "--porcelain"]
+            )
+        ),
+        "artifact_sha256": hashlib.sha256(Path(args.executable).read_bytes()).hexdigest(),
+        "diagnostics": args.diagnostics,
+        "results": results,
+        "contention": {
+            "requests_per_batch": 8,
+            "batches": 20,
+            "batch_median_ms": statistics.median(contention_samples),
+            "batch_max_ms": max(contention_samples),
+        },
+        "under_15ms_p95": all(
+            value["p95_ms"] < 15 for name, value in results.items() if name != "interpreter"
+        ),
+    }
+    encoded = json.dumps(report, indent=2) + "\n"
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(encoded)
+    print(encoded, end="")
 
 
 if __name__ == "__main__":

@@ -1,11 +1,14 @@
 mod classifier;
+mod clock;
 mod config;
 mod detector;
+#[cfg(feature = "diagnostics")]
 mod evaluation;
 mod hooks;
 mod observation;
 mod policy;
 mod state;
+#[cfg(feature = "diagnostics")]
 mod tracing;
 mod usage;
 
@@ -61,6 +64,7 @@ fn hook(client: &str, event: &str, path: Option<&str>, model: Option<&str>) {
             std::thread::sleep(Duration::from_millis((limit - elapsed).min(10)));
         }
     });
+    #[cfg(feature = "diagnostics")]
     let mut trace =
         (std::env::var("WHIP_IT_TRACE").as_deref() == Ok("otlp_json")).then(tracing::Trace::new);
     let mut resolved_event = event.to_owned();
@@ -74,6 +78,7 @@ fn hook(client: &str, event: &str, path: Option<&str>, model: Option<&str>) {
             (timeout * 1000.0).ceil().min(u64::MAX as f64) as u64,
             Ordering::Relaxed,
         );
+        #[cfg(feature = "diagnostics")]
         if let Some(trace) = &mut trace {
             trace.mark("config");
         }
@@ -88,6 +93,7 @@ fn hook(client: &str, event: &str, path: Option<&str>, model: Option<&str>) {
             .or_else(|| payload["hookEventName"].as_str().filter(|s| !s.is_empty()))
             .unwrap_or(event)
             .into();
+        #[cfg(feature = "diagnostics")]
         if let Some(trace) = &mut trace {
             trace.mark("input");
         }
@@ -96,21 +102,24 @@ fn hook(client: &str, event: &str, path: Option<&str>, model: Option<&str>) {
             &resolved_event,
             &payload,
             &config,
-            tracing::now_ms(),
+            clock::now_ms(),
             model,
         )?;
+        #[cfg(feature = "diagnostics")]
         if let Some(trace) = &mut trace {
             trace.mark("decision");
         }
         if let Some(response) = &outcome.response {
             output(response)?;
         }
+        #[cfg(feature = "diagnostics")]
         if let Some(trace) = &mut trace {
             trace.mark("output");
         }
         Ok::<_, &'static str>(outcome)
     }))
     .unwrap_or(Err("internal_error"));
+    #[cfg(feature = "diagnostics")]
     if let Some(trace) = trace {
         match result {
             Ok(outcome) => trace.emit(
@@ -128,7 +137,9 @@ fn hook(client: &str, event: &str, path: Option<&str>, model: Option<&str>) {
                 true,
             ),
         }
-    } else if result.is_err()
+        return;
+    }
+    if result.is_err()
         && ["DEBUG", "INFO", "WARNING"].contains(
             &std::env::var("LOG_LEVEL")
                 .unwrap_or_default()
@@ -151,8 +162,10 @@ fn run() -> Result<i32, &'static str> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "whip-it --client <codex|claude|antigravity> [--event <event>] [--config <path>]\nwhip-it <config|status|reset|test-prompt|evaluate|classify>\nwhip-it observe --client <client> [--session <id>] [--model-id <id>] < usage.json\nwhip-it status --client <client> --session <id> [--model-id <id>]\nwhip-it classify [--model <path>] < input.json\nwhip-it evaluate <traces.jsonl> [--expectations <labels.jsonl>]"
+            "whip-it --client <codex|claude|antigravity> [--event <event>] [--config <path>]\nwhip-it <config|status|reset|test-prompt|classify>\nwhip-it observe --client <client> [--session <id>] [--model-id <id>] < usage.json\nwhip-it status --client <client> --session <id> [--model-id <id>]\nwhip-it classify [--model <path>] < input.json"
         );
+        #[cfg(feature = "diagnostics")]
+        println!("whip-it evaluate <traces.jsonl> [--expectations <labels.jsonl>]");
         return Ok(0);
     }
     if args == ["--version"] {
@@ -165,6 +178,7 @@ fn run() -> Result<i32, &'static str> {
     let mut session = None;
     let mut model_path = None;
     let mut model_id = None;
+    #[cfg(feature = "diagnostics")]
     let mut labels = None;
     let mut positionals = Vec::new();
     let mut iter = args.iter();
@@ -183,6 +197,7 @@ fn run() -> Result<i32, &'static str> {
                 "--session" => session = Some(value.to_owned()),
                 "--model" => model_path = Some(value.to_owned()),
                 "--model-id" => model_id = Some(value.to_owned()),
+                #[cfg(feature = "diagnostics")]
                 "--expectations" => labels = Some(value.to_owned()),
                 _ => return Err("unknown option"),
             }
@@ -201,7 +216,7 @@ fn run() -> Result<i32, &'static str> {
             &read_json(std::io::stdin().lock())?,
             session.as_deref(),
             model_id.as_deref(),
-            tracing::now_ms(),
+            clock::now_ms(),
         )?;
         return Ok(0);
     }
@@ -229,6 +244,7 @@ fn run() -> Result<i32, &'static str> {
         "status" => {
             let (config, source) = config::load(config_path.as_deref());
             let mut info = json!({"version":env!("CARGO_PKG_VERSION"), "runtime":"rust",
+                "diagnostics":cfg!(feature = "diagnostics"),
                 "state_directory":config::directory("state"), "config_directory":config::directory("config"),
                 "config_source":source.map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "built-in defaults".into()),
                 "mode":config["mode"], "default_max_subagents":config["default_max_subagents"], "auto_clamp":config["auto_clamp"],
@@ -247,7 +263,7 @@ fn run() -> Result<i32, &'static str> {
                         &session,
                         model_id.as_deref(),
                     )
-                    .and_then(|s| observation::assess(&s.inputs(tracing::now_ms())).ok())
+                    .and_then(|s| observation::assess(&s.inputs(clock::now_ms())).ok())
                     .map_or(json!({"coverage":"unavailable"}), |d| d.signals);
                 }
                 info["session"] = serde_json::to_value(state::Session::new(&session).read())
@@ -273,6 +289,7 @@ fn run() -> Result<i32, &'static str> {
                 .transpose()?;
             output(&classifier::classify(&input, model.as_ref())?)?;
         }
+        #[cfg(feature = "diagnostics")]
         "evaluate" => {
             return evaluation::evaluate(
                 positionals.get(1).ok_or("missing trace file")?,

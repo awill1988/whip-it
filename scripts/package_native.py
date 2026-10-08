@@ -6,6 +6,8 @@ from pathlib import Path
 import tarfile
 import zipfile
 
+from verify_release import verify
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -17,6 +19,7 @@ def main():
         parser.error("binary does not exist")
     if any(char not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for char in args.target):
         parser.error("invalid target")
+    verify(args.binary)
     args.output.mkdir(parents=True, exist_ok=True)
     license_path = Path(__file__).resolve().parents[1] / "LICENSE"
     windows = "windows" in args.target

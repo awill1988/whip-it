@@ -1,8 +1,4 @@
-"""Prompt analysis and limit extraction engine for whip-it.
-
-Scans user prompts for directives that forbid or restrict subagent creation,
-require simplification, or impose numeric quotas on subagents.
-"""
+"""Extract delegation constraints; prohibitions take precedence over numeric quotas."""
 
 from __future__ import annotations
 
@@ -79,7 +75,7 @@ def analyze_prompt(prompt: str) -> PromptLimits:
 
     prompt_lower = prompt.lower()
 
-    # Check zero-subagent patterns first (most restrictive)
+    # Explicit prohibitions override numeric quotas in the same prompt.
     for pattern in ZERO_SUBAGENT_PATTERNS:
         match = re.search(pattern, prompt_lower)
         if match:
@@ -90,7 +86,6 @@ def analyze_prompt(prompt: str) -> PromptLimits:
                 detected_phrase=match.group(0),
             )
 
-    # Check explicit numerical quotas
     for pattern in QUOTA_PATTERNS:
         match = re.search(pattern, prompt_lower)
         if match:

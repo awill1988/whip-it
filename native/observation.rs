@@ -566,6 +566,7 @@ pub fn assess(input: &Value) -> Result<Decision, &'static str> {
             "allow"
         },
         reason: "usage_observed",
+        #[cfg(any(feature = "diagnostics", test))]
         inputs: input.clone(),
         signals,
     })
@@ -573,6 +574,7 @@ pub fn assess(input: &Value) -> Result<Decision, &'static str> {
 
 pub fn attach(mut decision: Decision, observed: Decision) -> Decision {
     decision.policy = "delegation_usage";
+    #[cfg(any(feature = "diagnostics", test))]
     for (key, value) in observed.inputs.as_object().into_iter().flatten() {
         decision.inputs[format!("usage.{key}")] = value.clone();
     }
