@@ -1,22 +1,36 @@
 # whip-it!
 
-A local guardrail for agent delegation in Claude Code, Antigravity, and Codex.
-It enforces subagent limits and explicit prompt constraints, returning instructions
-to continue in the main session when delegation is blocked. Allowed calls produce
-empty stdout, preserving the client's normal permission flow.
+> *“When a problem comes along, you must whip it!”*
 
-## Privacy and performance
+**Share the skill. Try the plugin. Keep enough budget for the rest of your work.**
 
-The normal executable contains no telemetry collection or export code and makes
-no network requests. Decisions run locally using a deterministic policy model.
-It stores local quota state and numeric usage snapshots; it may read local client
-usage metadata, but does not persist prompts, tool arguments, or transcript contents.
-Installation downloads and the host coding assistant have their own network behavior.
+`whip-it` is a local agent guardrail for Claude Code, Codex, and Antigravity.
+It puts your delegation limits outside the agent's discretion. When a plan gets
+carried away, it redirects the agent to keep working here, in smaller steps.
+One native executable; no additional language runtime, model download, or hosted
+service required.
 
-The full hook process targets **under 15 ms**. This is a target, not a universal
-deadline: see [reproducible benchmarks](benchmarks/README.md) for measured
-percentiles, workload coverage, and platform results. The separate offline
-softmax classifier is experimental and does not make hook admission decisions.
+## Why whip it?
+
+Someone shares a useful skill. You try a promising plugin. Your agent turns it
+into a subagent expedition, and suddenly the experiment costs more than you
+expected. Sharing good workflows should make trying things easier, without
+surprise token storms eating the rest of your usage window.
+
+Useful delegation belongs in the toolkit. You choose how much room it gets.
+The research behind [ADR 0002](docs/adr/0002-deterministic-guardrails-and-constructive-redirection.md)
+and [ADR 0003](docs/adr/0003-aggregate-trajectory-token-prediction-and-admission-control.md)
+includes *Towards a Science of Scaling Agent Systems*, which finds that
+“tool-heavy tasks suffer disproportionately from multi-agent overhead” under
+fixed computational budgets. It also finds benefits on parallelizable tasks:
+the work determines whether coordination earns its cost.
+([Paper](https://arxiv.org/abs/2512.08296))
+
+The aim is **usage continuity**: spread your available usage across the work you
+want to finish, whether you're exploring on a personal subscription or managing
+a team's budget. Today, `whip-it` enforces delegation limits and recognized prompt
+constraints. Usage estimates are informational; it does not yet enforce a spending
+cap or guarantee that your subscription lasts a week.
 
 ## Installation
 
@@ -74,6 +88,61 @@ See the [usage guide](docs/usage.md) for configuration, state, and diagnostics.
 Plan and usage assessment depend on available metadata; see
 [decision tracing](docs/decision-tracing.md) for coverage and limitations.
 
+## Keep working, slow your roll
+
+```mermaid
+flowchart LR
+    A[Shared skill or plugin] --> B[Harness proposes delegation]
+    B --> C[Local deterministic rules]
+    C -->|Within your limits| D[Native permission flow]
+    C -->|Outside your limits| E[Decline delegation and redirect]
+    E --> F[Continue here with smaller, sequential steps]
+```
+
+A restricted delegation gets a reason and a way forward. The hook tells the
+agent to use direct tools in the current session; the task can continue without
+spawning more agents. This changes the requested approach, not the provider's
+token rate, and the agent still has to follow the redirection.
+
+Illustrative feedback for an exhausted delegation quota:
+
+```text
+whip-it | delegation paused · continue here
+check: deterministic rule · no model call
+source: configured quota
+limit: 2 · reserved: 2 · requested: 1
+next: keep working here in smaller, sequential steps; use direct tools
+```
+
+Claude receives this summary through `systemMessage`; the supported adapters
+include it in denial reasons. Placement and error colors belong to the host
+client. Allowed calls stay silent and preserve its normal permission flow.
+
+### Is there a model involved?
+
+| Mechanism | What it does today |
+| --- | --- |
+| Deterministic delegation rules | Enforce recognized prompt constraints and configured quotas. The same policy inputs produce the same decision. No model call. |
+| Usage heuristics | Assess available numeric usage metadata. These estimates do not currently block calls; missing or stale data is not a safety guarantee. |
+| Experimental offline softmax classifier | Produces an uncalibrated score through `classify`. It does not make hook admission decisions. |
+
+The normal hook does not ask another language model whether your agent behaved.
+Internal errors fail open to preserve availability, so this is a workflow
+guardrail, not a billing firewall.
+
+## Privacy and performance
+
+The normal executable contains no telemetry collection or export code and makes
+no network requests. Decisions run locally. It stores local quota state and
+numeric usage snapshots; it may read local client usage metadata, but does not
+persist prompts, tool arguments, or transcript contents. Installation downloads
+and the host coding assistant have their own network behavior. Developer tracing
+requires a separate diagnostic build or the Python reference.
+
+The full hook process targets **under 15 ms**. This is a target, not a universal
+deadline: see [reproducible benchmarks](benchmarks/README.md) for measured
+percentiles, workload coverage, and platform results.
+
 ## Development
 
 Use the Rust toolchain above, Python 3.10+, and Poetry with dependency-group
@@ -103,6 +172,8 @@ review-tool tests, native/reference parity, packaging, and profiling.
 Architecture decisions are recorded in [`docs/adr/`](docs/adr/).
 
 ## Contributing
+
+Found a rough edge? Have a smaller, clearer way to do it? Contributions are welcome.
 
 Open an issue and wait for `status: accepted` or explicit maintainer acceptance
 before implementing a contribution. The maintainer, `@awill1988`, is exempt
