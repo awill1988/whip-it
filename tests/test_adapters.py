@@ -59,27 +59,38 @@ class TestAdapters(unittest.TestCase):
     def test_format_response_deny_antigravity(self):
         decision = GuardrailDecision(action="deny", reason="Blocked by whip-it")
         resp = format_response("antigravity", "PreToolUse", decision)
-        self.assertEqual(resp, {"decision": "deny", "reason": "Blocked by whip-it"})
+        self.assertEqual(resp["decision"], "deny")
+        self.assertTrue(resp["reason"].endswith("\n\nBlocked by whip-it"))
+        self.assertIn("next: keep working here", resp["reason"])
 
     def test_format_response_deny_claude_and_codex(self):
-        decision = GuardrailDecision(action="deny", reason="Blocked by whip-it")
+        decision = GuardrailDecision(
+            action="deny",
+            reason="Blocked by whip-it",
+            allowed_count=2,
+            spawned_so_far=2,
+            attempted_count=1,
+        )
         for client in ("claude", "codex"):
             with self.subTest(client=client):
                 resp = format_response(client, "PreToolUse", decision)
                 if client == "claude":
                     self.assertEqual(
                         resp.pop("systemMessage"),
-                        "whip-it | delegation blocked | 0/0 reserved | continue in the main session",
+                        "whip-it | delegation paused · continue here\n"
+                        "check: deterministic rule · no model call\n"
+                        "source: configured quota\n"
+                        "limit: 2 · reserved: 2 · requested: 1\n"
+                        "next: keep working here in smaller, sequential steps; use direct tools",
                     )
-                self.assertEqual(
-                    resp,
-                    {
-                        "hookSpecificOutput": {
-                            "hookEventName": "PreToolUse",
-                            "permissionDecision": "deny",
-                            "permissionDecisionReason": "Blocked by whip-it",
-                        }
-                    },
+                output = resp["hookSpecificOutput"]
+                self.assertEqual(output["hookEventName"], "PreToolUse")
+                self.assertEqual(output["permissionDecision"], "deny")
+                self.assertIn(
+                    "limit: 2 · reserved: 2 · requested: 1", output["permissionDecisionReason"]
+                )
+                self.assertTrue(
+                    output["permissionDecisionReason"].endswith("\n\nBlocked by whip-it")
                 )
 
     def test_end_to_end_user_prompt_then_pretooluse(self):
@@ -110,10 +121,40 @@ class TestAdapters(unittest.TestCase):
         )
         self.assertIn("current user turn", hook_out["permissionDecisionReason"])
         self.assertIn("SIMPLIFY YOUR PLAN", hook_out["permissionDecisionReason"])
-        self.assertEqual(
-            r2["systemMessage"],
-            "whip-it | delegation blocked | 0/0 reserved | continue in the main session",
-        )
+        self.assertIn("source: current prompt", r2["systemMessage"])
+        self.assertIn("limit: 0 · reserved: 0 · requested: 1", r2["systemMessage"])
+        self.assertIn(r2["systemMessage"], hook_out["permissionDecisionReason"])
+
+    def test_redirection_preserves_custom_guidance_and_direct_execution(self):
+        config = dict(self.config, custom_redirection_message="work locally; cap {max_allowed}")
+        for client, tool in (
+            ("claude", "Agent"),
+            ("codex", "spawn_agent"),
+            ("antigravity", "invoke_subagent"),
+        ):
+            with self.subTest(client=client):
+                payload = {
+                    "session_id": client,
+                    "conversationId": client,
+                    "tool_name": tool,
+                    "tool_input": {},
+                    "toolCall": {"name": tool, "args": {"Subagents": [{}, {}, {}]}},
+                }
+                response = process_event(client, "PreToolUse", payload, config, self.state_dir)
+                reason = (
+                    response["reason"]
+                    if client == "antigravity"
+                    else response["hookSpecificOutput"]["permissionDecisionReason"]
+                )
+                self.assertIn("check: deterministic rule · no model call", reason)
+                self.assertIn(f"requested: {3 if client == 'antigravity' else 1}", reason)
+                self.assertIn("next: keep working here", reason)
+                self.assertTrue(reason.endswith("work locally; cap 0"))
+                payload["tool_name"] = "read_file"
+                payload["toolCall"]["name"] = "read_file"
+                self.assertIsNone(
+                    process_event(client, "PreToolUse", payload, config, self.state_dir)
+                )
 
 
 if __name__ == "__main__":

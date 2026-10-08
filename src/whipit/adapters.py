@@ -61,11 +61,22 @@ def format_response(
     if decision.action == "allow":
         return None  # Empty output preserves native client execution flow
 
+    source = "current prompt" if decision.is_autonomous_override else "configured quota"
+    summary = (
+        "whip-it | delegation paused · continue here\n"
+        "check: deterministic rule · no model call\n"
+        f"source: {source}\n"
+        f"limit: {decision.allowed_count} · reserved: {decision.spawned_so_far} · "
+        f"requested: {decision.attempted_count}\n"
+        "next: keep working here in smaller, sequential steps; use direct tools"
+    )
+    reason = f"{summary}\n\n{decision.reason}" if decision.action == "deny" else decision.reason
+
     if client == "antigravity":
         if decision.action == "deny":
             return {
                 "decision": "deny",
-                "reason": decision.reason,
+                "reason": reason,
             }
         if decision.action == "clamp" and decision.overrides:
             return {
@@ -89,15 +100,11 @@ def format_response(
             "hookSpecificOutput": {
                 "hookEventName": event,
                 "permissionDecision": "deny",
-                "permissionDecisionReason": decision.reason,
+                "permissionDecisionReason": reason,
             }
         }
         if client == "claude":
-            response["systemMessage"] = (
-                "whip-it | delegation blocked | "
-                f"{decision.spawned_so_far}/{decision.allowed_count} reserved | "
-                "continue in the main session"
-            )
+            response["systemMessage"] = summary
         return response
     if decision.action == "advise":
         return {
