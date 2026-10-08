@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 import sys
 import tempfile
+import textwrap
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
@@ -144,10 +145,35 @@ class TestTracing(unittest.TestCase):
     def test_watchdog_exits_when_trace_delivery_stalls(self):
         config = self.root / "deadline.json"
         config.write_text('{"timeout_seconds":0.1}')
-        code = (
-            "import time; from whipit import cli, tracing; "
-            "tracing.DecisionTrace.emit = lambda self: time.sleep(30); "
-            "raise SystemExit(cli.main())"
+        code = textwrap.dedent(
+            """
+            import sys
+            import threading
+            import time
+            from whipit import adapters, cli, tracing
+
+            delivery_started = threading.Event()
+            class DeliveryTimer(threading.Timer):
+                def run(self):
+                    delivery_started.wait()
+                    super().run()
+
+            original_process = adapters.process_event
+            def slow_decision(*args, **kwargs):
+                time.sleep(0.2)
+                return original_process(*args, **kwargs)
+
+            def stalled_delivery(self):
+                sys.stderr.write("trace delivery started\\n")
+                sys.stderr.flush()
+                delivery_started.set()
+                threading.Event().wait(30)
+
+            cli.threading.Timer = DeliveryTimer
+            adapters.process_event = slow_decision
+            tracing.DecisionTrace.emit = stalled_delivery
+            raise SystemExit(cli.main())
+            """
         )
         env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"))
         result = subprocess.run(
@@ -156,9 +182,11 @@ class TestTracing(unittest.TestCase):
             text=True,
             capture_output=True,
             env=env,
-            timeout=3,
+            timeout=10,
         )
         self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stderr, "trace delivery started\n")
+        self.assertTrue(result.stdout, "denial must be flushed before trace delivery")
         self.assertEqual(
             json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"], "deny"
         )
