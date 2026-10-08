@@ -121,6 +121,15 @@ jobs:
       - name: Ensure Model & Runner
         run: python3 tools/adversarial_reviewer/fetch_model.py
 
+      - name: Check reviewer on known changes
+        run: |
+          export LD_LIBRARY_PATH="$HOME/.cache/adversarial-reviewer/llama_runner/build/bin:$HOME/.cache/adversarial-reviewer:${LD_LIBRARY_PATH:-}"
+          runner="$HOME/.cache/adversarial-reviewer/llama_runner/build/bin/llama-cli"
+          if [ ! -x "$runner" ]; then
+            runner="$HOME/.cache/adversarial-reviewer/llama_runner/llama-cli"
+          fi
+          python3 tools/adversarial_reviewer/evaluate_model.py --runner "$runner"
+
       - name: Run Adversarial Code Review
         id: review
         continue-on-error: true
