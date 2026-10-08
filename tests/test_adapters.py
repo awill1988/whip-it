@@ -66,6 +66,11 @@ class TestAdapters(unittest.TestCase):
         for client in ("claude", "codex"):
             with self.subTest(client=client):
                 resp = format_response(client, "PreToolUse", decision)
+                if client == "claude":
+                    self.assertEqual(
+                        resp.pop("systemMessage"),
+                        "whip-it | delegation blocked | 0/0 reserved | continue in the main session",
+                    )
                 self.assertEqual(
                     resp,
                     {
@@ -103,8 +108,12 @@ class TestAdapters(unittest.TestCase):
         self.assertIn(
             "Autonomous delegation override blocked", hook_out["permissionDecisionReason"]
         )
-        self.assertIn("without subagents", hook_out["permissionDecisionReason"])
+        self.assertIn("current user turn", hook_out["permissionDecisionReason"])
         self.assertIn("SIMPLIFY YOUR PLAN", hook_out["permissionDecisionReason"])
+        self.assertEqual(
+            r2["systemMessage"],
+            "whip-it | delegation blocked | 0/0 reserved | continue in the main session",
+        )
 
 
 if __name__ == "__main__":

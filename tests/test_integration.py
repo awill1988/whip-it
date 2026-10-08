@@ -52,7 +52,7 @@ class TestIntegrationWorkflows(unittest.TestCase):
 
         # Verify state
         state = SessionState(session_id, state_dir=self.state_dir).read()
-        self.assertEqual(state["subagents_spawned"], 1)
+        self.assertEqual(state["subagents_reserved"], 1)
 
         # Turn 3: Agent attempts second subagent (exceeds quota!)
         turn3_call = {
@@ -102,7 +102,7 @@ class TestIntegrationWorkflows(unittest.TestCase):
         self.assertIsNotNone(res2)
         self.assertEqual(res2["decision"], "deny")
         self.assertIn("Autonomous delegation override blocked", res2["reason"])
-        self.assertIn("no subagents", res2["reason"])
+        self.assertIn("current user turn", res2["reason"])
         self.assertIn("SIMPLIFY YOUR PLAN", res2["reason"])
 
         # Verify blocked override counter

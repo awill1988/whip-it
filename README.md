@@ -21,6 +21,17 @@ Even when the user explicitly instructs the agent:
 
 ...the agent's internal planner often **autonomously overrides** these limits, spawning multi-agent hierarchies anyway. System prompt instructions alone cannot guarantee compliance because the model can self-rationalize or hallucinate exceptions.
 
+### Research Foundation & Background
+
+`whip-it` is engineered around four empirical findings in agentic software engineering and safety literature:
+
+1. **The Collaboration Tax**: Recent studies ([Zhang et al., 2026](https://arxiv.org/abs/2602.04325); [Google DeepMind & MIT, 2026](https://research.google/pubs/towards-a-science-of-scaling-agent-systems/); [Wang et al., 2024](https://arxiv.org/abs/2409.19892)) show that for sequential, state-dependent tasks, multi-agent hierarchies introduce a heavy "collaboration tax"—inflating token usage and latency 3–8× with negligible or negative accuracy gain over direct single-context execution.
+2. **Positivity Bias & Context Rot**: LLMs exhibit an innate positivity bias, following positive instructions significantly better than negative constraints ([Zhou et al., 2023](https://arxiv.org/abs/2311.07911)). As trajectories grow with exploration transcripts, model attention drifts away from early instructions ("Lost in the Middle", [Liu et al., 2024](https://arxiv.org/abs/2307.03172)), causing the planner to autonomously override user bounds—triggering the **Excessive Agency** failure mode ([OWASP LLM06/LLM08](https://genai.owasp.org/)).
+3. **Infinite Agentic Loops (IALs)**: When agents encounter unhandled errors or bare rejections, they frequently enter repetitive retry thrashing loops ([Sun et al., 2025](https://arxiv.org/abs/2501.17144)). Safety boundaries must be enforced by deterministic external harnesses rather than model self-regulation.
+4. **Constructive Redirection**: Studies on verbal reinforcement ([*Reflexion*, Shinn et al., 2023](https://arxiv.org/abs/2303.11366)) and Agent-Computer Interface design ([*SWE-agent*, Yang et al., 2024](https://arxiv.org/abs/2405.15793)) prove that providing explicit, actionable simplification instructions allows the model to immediately absorb the boundary and succeed in-context, whereas generic blocks induce retry thrashing.
+
+See [ADR 0002](docs/adr/0002-deterministic-guardrails-and-constructive-redirection.md) for the full architectural rationale and literature synthesis.
+
 `whip-it` provides external, deterministic enforcement at the tool-call lifecycle layer.
 
 ```mermaid
@@ -30,9 +41,9 @@ flowchart TD
     ToolCall --> Hook["PreToolUse Hook (whip-it)"]
     Hook --> Detector["Limit Detector & Session State"]
     Detector --> Decision{"Violates Limit or Prompt Constraint?"}
-    Decision -- Yes --> Intervene["Intervene: Block (deny) + Redirect Feedback"]
+    Decision -- Yes --> Intervene["Intervene: Block (deny) + Constructive Redirection"]
     Decision -- No --> Allow["Pass Through (empty stdout preserves native flow)"]
-    Intervene --> AgentLoop["Agent Receives Redirection Notice & Simplifies Directly"]
+    Intervene --> AgentLoop["Agent Receives Redirection & Simplifies Directly in Context"]
 ```
 
 ---
@@ -43,15 +54,22 @@ flowchart TD
 
 | Agent Client | Intercepted Event | Target Tools | Hook Action on Limit Violation | Prompt Constraint Event |
 | :--- | :--- | :--- | :--- | :--- |
-| **Google Antigravity CLI** | `PreToolUse` | `invoke_subagent`, `define_subagent` | `{"decision": "deny", "reason": "..."}` | `PreInvocation` & prompt scanning |
+| **Google Antigravity CLI** | `PreToolUse` | `invoke_subagent`, `define_subagent` | `{"decision": "deny", "reason": "..."}` | `PreInvocation` when prompt text is available |
 | **Anthropic Claude Code** | `PreToolUse` | `Agent`, `Task` | `{"hookSpecificOutput": {"permissionDecision": "deny", ...}}` | `UserPromptSubmit` |
 | **OpenAI Codex CLI** | `PreToolUse` | `spawn_agent`, `subagent`, `agent` | `{"hookSpecificOutput": {"permissionDecision": "deny", ...}}` | `UserPromptSubmit` |
+
+Codex plan assessment uses `Stop` with a tagged proposed plan and local usage
+metadata. Claude's `ExitPlanMode` hook reports unavailable usage projection when
+the required metadata is absent. See [decision tracing](docs/decision-tracing.md)
+for the current coverage and interpretation of these observations, and
+[ADR 0003](docs/adr/0003-aggregate-trajectory-token-prediction-and-admission-control.md)
+for the aggregate trajectory prediction and admission control architecture.
 
 ---
 
 ## Behavior & Principles
 
-- **Zero Runtime Dependencies**: The runtime engine uses only the Python 3.10+ standard library. Hook execution takes less than 15 ms, adding negligible latency to tool execution.
+- **Zero Runtime Dependencies**: The runtime engine uses only the Python 3.10+ standard library. Installed-wheel measurements on macOS with Python 3.14.5 showed 19.6 ms median for unrelated tools and 22.1–22.4 ms for policy/state paths. Interpreter startup alone measured 13.3 ms. The 15 ms process target remains unmet; see [benchmark results](docs/decision-tracing.md#latency-measurement).
 - **Autonomous Override Protection**: When a prompt explicitly specifies limits (e.g. *"no subagents"*), any subagent tool call is flagged as an autonomous override attempt and denied with high-priority simplification feedback.
 - **Constructive Redirection**: Rejections provide clear, actionable instructions telling the agent exactly how to proceed: decompose linearly, use direct tools, and avoid delegation.
 - **Preserves Native Permissions**: When a tool invocation is allowed, `whip-it` outputs nothing to stdout, allowing the host client's normal permission dialog and execution pipeline to proceed without interference.
@@ -103,17 +121,6 @@ Merge the handlers from [`hooks/antigravity.json`](hooks/antigravity.json) into 
         "type": "command",
         "command": "whip-it --client antigravity --event PreInvocation"
       }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "invoke_subagent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "whip-it --client antigravity --event PostToolUse"
-          }
-        ]
-      }
     ]
   }
 }
@@ -127,7 +134,7 @@ Merge the handlers from [`hooks/claude.json`](hooks/claude.json) into `~/.claude
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Agent|Task",
+        "matcher": "Agent|Task|ExitPlanMode",
         "hooks": [
           {
             "type": "command",
@@ -143,17 +150,6 @@ Merge the handlers from [`hooks/claude.json`](hooks/claude.json) into `~/.claude
           {
             "type": "command",
             "command": "whip-it --client claude --event UserPromptSubmit"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Agent|Task",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "whip-it --client claude --event PostToolUse"
           }
         ]
       }
@@ -186,6 +182,16 @@ Merge the handlers from [`hooks/codex.json`](hooks/codex.json) into `~/.codex/ho
           {
             "type": "command",
             "command": "whip-it --client codex --event UserPromptSubmit"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "whip-it --client codex --event Stop"
           }
         ]
       }
@@ -230,6 +236,23 @@ whip-it config
 whip-it reset my-conversation-id
 ```
 
+### Decision Tracing and Evaluation
+
+Set `WHIP_IT_TRACE=otlp_json` on a hook command to emit an OpenTelemetry Protocol
+(OTLP) JSON span to stderr. Each span records content-free inputs, the policy
+recommendation, the applied action, and a stable reason code. Collection and
+export run outside the hook; stdout retains the native client response.
+
+Replay captured spans and compare optional independent labels:
+
+```bash
+whip-it evaluate decisions.jsonl
+whip-it evaluate decisions.jsonl --expectations labels.jsonl
+```
+
+See [decision tracing](docs/decision-tracing.md) for capture, labels, limitations,
+and reproducible latency measurements.
+
 ---
 
 ## Configuration & Environment
@@ -263,6 +286,8 @@ whip-it reset my-conversation-id
 - `WHIP_IT_AUTO_CLAMP`: `1` / `true` to clamp excessive arrays instead of hard denying
 - `WHIP_IT_STATE_DIR`: Custom session state storage directory
 - `WHIP_IT_CONFIG_DIR`: Custom configuration directory
+- `WHIP_IT_TRACE`: `otlp_json` enables decision spans on stderr; disabled by default
+- `LOG_LEVEL`: Diagnostic verbosity; defaults to `ERROR`. `WARNING` exposes untraced fail-open diagnostics. Traced failures are represented in spans.
 
 ---
 
@@ -300,4 +325,3 @@ git config core.hooksPath .githooks
 ## License
 
 MIT License. Copyright (c) 2026 Adam Williams.
-

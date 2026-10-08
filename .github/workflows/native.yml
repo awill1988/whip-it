@@ -1,0 +1,92 @@
+name: native executables
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: install toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+          rustup target add "${{ matrix.target }}"
+      - name: install musl linker
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          echo 'RUSTFLAGS=-C linker=musl-gcc' >> "$GITHUB_ENV"
+      - name: format and lint
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets --target ${{ matrix.target }} -- -D warnings
+      - name: test and build
+        run: |
+          cargo test --locked --target ${{ matrix.target }}
+          cargo build --locked --release --target ${{ matrix.target }}
+      - name: verify and package
+        shell: bash
+        run: |
+          binary="target/${{ matrix.target }}/release/whip-it"
+          if [ "$RUNNER_OS" = Windows ]; then binary="$binary.exe"; fi
+          python scripts/verify_native.py --executable "$binary"
+          python scripts/verify_observations.py --executable "$binary"
+          python scripts/package_native.py --binary "$binary" --target "${{ matrix.target }}" --output dist/native
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whip-it-${{ matrix.target }}
+          path: dist/native/*
+          if-no-files-found: error
+
+  universal_macos:
+    needs: build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: whip-it-*-apple-darwin
+          path: artifacts
+      - name: combine architectures
+        run: |
+          mkdir -p target/universal/intel target/universal/arm
+          tar -xzf artifacts/whip-it-x86_64-apple-darwin/*.tar.gz -C target/universal/intel
+          tar -xzf artifacts/whip-it-aarch64-apple-darwin/*.tar.gz -C target/universal/arm
+          lipo -create target/universal/intel/whip-it target/universal/arm/whip-it -output target/universal/whip-it
+          codesign --force --sign - target/universal/whip-it
+          lipo target/universal/whip-it -verify_arch x86_64
+          lipo target/universal/whip-it -verify_arch arm64
+          python3 scripts/package_native.py --binary target/universal/whip-it --target universal-apple-darwin --output dist/native
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whip-it-universal-apple-darwin
+          path: dist/native/*

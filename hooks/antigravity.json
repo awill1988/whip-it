@@ -16,17 +16,6 @@
         "type": "command",
         "command": "whip-it --client antigravity --event PreInvocation"
       }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "invoke_subagent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "whip-it --client antigravity --event PostToolUse"
-          }
-        ]
-      }
     ]
   }
 }

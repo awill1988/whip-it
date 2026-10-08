@@ -6,7 +6,8 @@ See [README.md](README.md) for setup, client hook configuration, and verificatio
 
 - Use the Python standard library exclusively for the runtime engine. Do not introduce
   third-party runtime dependencies, external HTTP services, or background daemons.
-- Hooks must be deterministic, synchronous, and execute with sub-millisecond overhead (< 15 ms).
+- Hooks must be deterministic and synchronous. Target process wall time below 15 ms;
+  report measured wall time and interpreter startup separately when the target is unmet.
 - Process watchdog timers must bound execution deadlines (default: 5 seconds) so that a stalled
   hook never hangs an agent session loop.
 - Preserve native client permissions: when an invocation is within limits, return `None` (empty stdout)
@@ -24,6 +25,11 @@ See [README.md](README.md) for setup, client hook configuration, and verificatio
 - Session state tracking must be atomic and crash-safe (write temporary file, atomic replace).
 - Telemetry/state is content-free: persist only session identifiers, counter tallies, quota limits,
   and blocked override counts. Never persist tool arguments, full transcripts, or credentials.
+- Opt-in decision traces may additionally contain schema/policy versions, client/event categories,
+  stable reason codes, actions, numeric policy inputs, policy flags, timestamps, durations,
+  trace/span identifiers, and hashed session identifiers. Exclude prompts, plans, tool arguments,
+  arbitrary tool names, transcript paths, response messages, credentials, and exception text.
+  Emit traces to stderr; collection and export belong outside hook execution.
 
 ## Python data contracts
 

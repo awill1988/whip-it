@@ -49,6 +49,22 @@ class TestCLI(unittest.TestCase):
         output = json.loads(buf.getvalue())
         self.assertIn("version", output)
         self.assertIn("state_directory", output)
+        self.assertIn("unavailable", output["plan_assessment"]["antigravity"])
+
+    def test_hook_flag_parser_matches_standard_parser(self):
+        variants = (
+            ["--client", "codex"],
+            ["--event=Stop", "--client=claude", "--config=/tmp/config.json"],
+            ["--client", "claude", "--client", "codex", "--event", "Stop"],
+            ["--config", "a path.json", "--client", "antigravity", "--event="],
+        )
+        for args in variants:
+            with self.subTest(args=args), patch("whipit.cli._run_hook", return_value=0) as run:
+                self.assertEqual(cli.main(args), 0)
+                fast_call = run.call_args
+                with patch("whipit.cli._hook_options", return_value=None):
+                    self.assertEqual(cli.main(args), 0)
+                self.assertEqual(fast_call, run.call_args)
 
     @patch(
         "sys.stdin",
