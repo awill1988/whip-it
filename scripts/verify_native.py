@@ -138,6 +138,32 @@ def verify(executable, diagnostics=False):
             compare(payload, "antigravity", WHIP_IT_AUTO_CLAMP=clamp, WHIP_IT_MAX_SUBAGENTS="2")
             compare(payload, "antigravity", WHIP_IT_AUTO_CLAMP=clamp, WHIP_IT_MAX_SUBAGENTS="2")
 
+        custom_config = root / "custom.json"
+        custom_config.write_text(
+            json.dumps(
+                {
+                    "custom_redirection_message": "work locally; cap {max_allowed}; requested {attempted_count}"
+                }
+            )
+        )
+        for client, tool in (
+            ("claude", "Agent"),
+            ("codex", "spawn_agent"),
+            ("antigravity", "invoke_subagent"),
+        ):
+            compare(
+                {
+                    "session_id": "custom-" + client,
+                    "conversationId": "custom-" + client,
+                    "tool_name": tool,
+                    "tool_input": {},
+                    "toolCall": {"name": tool, "args": {"Subagents": [{}, {}, {}]}},
+                },
+                client,
+                WHIP_IT_CONFIG=str(custom_config),
+                WHIP_IT_MAX_SUBAGENTS="0",
+            )
+
         now = datetime.now(timezone.utc)
         transcript = root / "private-content.jsonl"
         for age in (0, 301, -60):

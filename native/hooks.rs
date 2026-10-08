@@ -252,9 +252,21 @@ fn response(
             .replace("{attempted_count}", &inputs.attempted.to_string())
             .replace("{spawned_so_far}", &inputs.reserved.to_string());
     }
+    let source = if inputs.prompt_limit {
+        "current prompt"
+    } else {
+        "configured quota"
+    };
+    let summary = format!(
+        "whip-it | delegation paused | continue here\ncheck: deterministic rule | no model call\nsource: {source}\nlimit: {} | reserved: {} | requested: {}\nnext: keep working here in smaller, sequential steps; use direct tools",
+        inputs.allowed, inputs.reserved, inputs.attempted
+    );
+    if decision.action == "deny" {
+        reason = format!("{summary}\n\n{reason}");
+    }
     Some(match (client, decision.action) {
         ("claude", "deny") => json!({
-            "systemMessage":format!("whip-it | delegation blocked | {}/{} reserved | continue in the main session", inputs.reserved, inputs.allowed),
+            "systemMessage":summary,
             "hookSpecificOutput":{"hookEventName":event, "permissionDecision":"deny", "permissionDecisionReason":reason}
         }),
         ("antigravity", "deny") => json!({"decision":"deny", "reason":reason}),
