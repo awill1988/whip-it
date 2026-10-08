@@ -269,7 +269,6 @@ def run_model_reviewer(
 
 def review_diff(diff, files, runner_path, model_path, *, mock=False):
     report = {
-        "assessment_version": 2,
         "disposition": "COMMENT",
         "complete": False,
         "files": len(files),

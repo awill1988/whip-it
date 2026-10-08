@@ -182,7 +182,7 @@ jobs:
               core.notice('review superseded or pull request not ready');
               return;
             }
-            const complete = report.assessment_version === 2 && report.complete === true &&
+            const complete = report.complete === true &&
               Number.isSafeInteger(report.total_lines) && report.total_lines > 0 &&
               report.reviewed_lines === report.total_lines &&
               Number.isSafeInteger(report.total_chunks) && report.total_chunks > 0 &&
