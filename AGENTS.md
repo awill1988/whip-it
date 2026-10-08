@@ -4,8 +4,10 @@ See [README.md](README.md) for setup, client hook configuration, and verificatio
 
 ## Runtime and platform boundaries
 
-- Use the Python standard library exclusively for the runtime engine. Do not introduce
-  third-party runtime dependencies, external HTTP services, or background daemons.
+- The Rust executable is the native runtime; the Python reference uses only the
+  standard library. Preserve their shared hook contracts. Rust dependencies are
+  compiled into the executable; do not add runtime language prerequisites,
+  external HTTP services, or background daemons.
 - Hooks must be deterministic and synchronous. Target process wall time below 15 ms;
   report measured wall time and interpreter startup separately when the target is unmet.
 - Process watchdog timers must bound execution deadlines (default: 5 seconds) so that a stalled

@@ -63,15 +63,17 @@ one polite follow-up on the issue or pull request is welcome.
 Changes must preserve the project's core contract unless an accepted issue
 explicitly changes it:
 
-- **Sub-15ms hook execution latency**: Agent lifecycle hooks execute on every
-  tool call and invocation event; latency must stay negligible.
-- **Zero external runtime dependencies**: The engine runtime requires only
-  Python 3.10+ standard library modules (`sys`, `os`, `re`, `json`, `hashlib`,
-  `pathlib`, `fcntl`).
+- **Hook execution latency**: Target process wall time below 15 ms; report
+  measured wall time and interpreter startup separately when the target is unmet.
+- **Runtime boundaries**: The Rust executable runs without Rust or Python
+  installed. The Python reference requires Python 3.10+ and only its standard
+  library. Preserve shared hook contracts; do not add external HTTP services
+  or background daemons.
 - **Fail-open resilience**: Hook errors, malformed payloads, or unexpected
   exceptions must never crash or deadlock the parent agent session.
 - **Atomic state persistence**: Session quota state must be written atomically
-  and protected with file locking (`fcntl`) against concurrent hook runs.
+  and protected with interoperable file locking against concurrent Rust and
+  Python hook runs on Unix and Windows.
 - **Multi-client parity**: Protocol adapters must maintain equivalent safety
   and simplification semantics across Anthropic Claude Code, Google
   Antigravity CLI, and OpenAI Codex CLI.
@@ -118,13 +120,20 @@ enforced locally via `.githooks/commit-msg` and verified in CI.
 Run the checks that match CI before requesting review:
 
 ```sh
+poetry check --lock --strict
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
 poetry run ruff check .
 poetry run ruff format --check .
 poetry run python -m unittest discover -s tests -p "test_*.py" -v
 python3 tools/commit_check/test_commit_check.py
-python3 tools/adversarial_reviewer/test_adversarial_review.py
+poetry run python -m unittest discover -s tools/adversarial_reviewer
 poetry build
 ```
+
+See [development verification](docs/usage.md#development-verification) for
+native parity checks, isolated packaging, and profiling.
 
 Add focused tests for behavior changes. Update documentation when the accepted
 change alters interfaces, hook schemas, configuration options, or
