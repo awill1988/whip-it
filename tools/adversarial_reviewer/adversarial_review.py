@@ -214,7 +214,7 @@ def run_model_reviewer(
     if proc.returncode != 0:
         print(f"runner exit {proc.returncode}: {json.dumps(proc.stderr[-2000:])}", file=sys.stderr)
         return "COMMENT", [], "review incomplete: runner exited unsuccessfully."
-    output = proc.stdout.strip()
+    output = proc.stdout.strip().removesuffix("[end of text]").rstrip()
     if not output:
         return "COMMENT", [], "review incomplete: runner returned no output."
 
