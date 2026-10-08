@@ -7,23 +7,139 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 sys.path.insert(0, str(SCRIPT_DIR))
 
 import unittest
+import subprocess
+from unittest.mock import patch
 
 from adversarial_review import (
     format_markdown_summary,
     run_heuristic_reviewer,
-    should_ignore_file,
+    run_model_reviewer,
+    extract_git_diff,
+    review_diff,
+    split_diff,
+    CHUNK_BYTES,
 )
 from best_practices import get_best_practices_context, INVARIANT_RULES
 
 
 class TestAdversarialReviewer(unittest.TestCase):
-    def test_ignore_patterns(self):
-        self.assertTrue(should_ignore_file("poetry.lock"))
-        self.assertTrue(should_ignore_file("README.md"))
-        self.assertTrue(should_ignore_file(".gitignore"))
-        self.assertTrue(should_ignore_file(".github/workflows/ci.yml"))
-        self.assertFalse(should_ignore_file("src/whipit/engine.py"))
-        self.assertFalse(should_ignore_file("pyproject.toml"))
+    def test_runner_failures_cannot_approve(self):
+        for status, output in (
+            (1, "DISPOSITION: APPROVE"),
+            (0, ""),
+            (0, "DISPOSITION: APPROVE"),
+            (0, "no issues"),
+            (0, "DISPOSITION: APPROVE\nDISPOSITION: COMMENT"),
+        ):
+            with (
+                self.subTest(status=status, output=output),
+                patch(
+                    "adversarial_review.subprocess.run",
+                    return_value=subprocess.CompletedProcess([], status, output, ""),
+                ),
+            ):
+                disposition, _, summary = run_model_reviewer(
+                    "diff", [], "", Path("runner"), Path("model")
+                )
+                self.assertEqual(disposition, "COMMENT")
+                self.assertIn("review incomplete", summary)
+
+    def test_runner_requires_explicit_disposition_with_rationale(self):
+        with patch(
+            "adversarial_review.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                [],
+                0,
+                "the changed branch preserves the existing limit check.\nDISPOSITION: APPROVE",
+                "",
+            ),
+        ):
+            disposition, _, summary = run_model_reviewer(
+                "diff", [], "", Path("runner"), Path("model")
+            )
+        self.assertEqual(disposition, "APPROVE")
+        self.assertTrue(summary)
+
+    def test_runner_timeout_cannot_approve(self):
+        with patch(
+            "adversarial_review.subprocess.run", side_effect=subprocess.TimeoutExpired("runner", 60)
+        ):
+            disposition, _, summary = run_model_reviewer(
+                "diff", [], "", Path("runner"), Path("model")
+            )
+        self.assertEqual(disposition, "COMMENT")
+        self.assertIn("review incomplete", summary)
+
+    def test_large_diff_preserves_every_line_and_file_header(self):
+        diff = "diff --git a/a.rs b/a.rs\n" + "+token\n" * 7000
+        diff += "diff --git a/README.md b/README.md\n+updated\n"
+        chunks = split_diff(diff)
+        self.assertGreater(len(chunks), 1)
+        self.assertEqual("".join(chunk for _, chunk in chunks), diff)
+        self.assertTrue(all(len(chunk.encode()) <= CHUNK_BYTES for _, chunk in chunks))
+        self.assertEqual(chunks[-1][0], "diff --git a/README.md b/README.md")
+        with patch(
+            "adversarial_review.subprocess.run",
+            side_effect=[
+                subprocess.CompletedProcess([], 0, "a.rs\0README.md\0", ""),
+                subprocess.CompletedProcess([], 0, diff, ""),
+            ],
+        ):
+            extracted, files = extract_git_diff()
+        self.assertEqual(extracted, diff)
+        self.assertEqual(files, ["a.rs", "README.md"])
+
+    def test_approval_requires_every_chunk(self):
+        diff = "diff --git a/a.rs b/a.rs\n" + "+token\n" * 7000
+        with (
+            patch.object(Path, "exists", return_value=True),
+            patch(
+                "adversarial_review.run_model_reviewer",
+                return_value=("APPROVE", [], "checked branch"),
+            ) as runner,
+        ):
+            report = review_diff(diff, ["a.rs"], Path("runner"), Path("model"))
+        self.assertTrue(report["complete"])
+        self.assertEqual(report["disposition"], "APPROVE")
+        self.assertEqual(report["total_chunks"], runner.call_count)
+        self.assertEqual(report["reviewed_lines"], len(diff.splitlines()))
+        with (
+            patch.object(Path, "exists", return_value=True),
+            patch(
+                "adversarial_review.run_model_reviewer",
+                side_effect=[
+                    ("APPROVE", [], "checked branch"),
+                    ("COMMENT", [], "review incomplete: runner failed."),
+                ],
+            ),
+        ):
+            report = review_diff(diff, ["a.rs"], Path("runner"), Path("model"))
+        self.assertFalse(report["complete"])
+        self.assertEqual(report["disposition"], "COMMENT")
+        self.assertEqual(report["completed_chunks"], 1)
+
+    def test_missing_runner_empty_diff_and_binary_changes_cannot_approve(self):
+        for diff in ("", "Binary files a/x and b/x differ\n", "+code\n", "+" * (CHUNK_BYTES + 1)):
+            with patch.object(Path, "exists", return_value=False):
+                report = review_diff(diff, ["x"], Path("runner"), Path("model"))
+            self.assertFalse(report["complete"])
+            self.assertNotEqual(report["disposition"], "APPROVE")
+
+    def test_findings_from_any_chunk_prevent_approval(self):
+        diff = "diff --git a/a b/a\n+one\ndiff --git a/b b/b\n+two\n"
+        with (
+            patch.object(Path, "exists", return_value=True),
+            patch(
+                "adversarial_review.run_model_reviewer",
+                side_effect=[
+                    ("REQUEST_CHANGES", [], "missing validation in a"),
+                    ("APPROVE", [], "checked b"),
+                ],
+            ),
+        ):
+            report = review_diff(diff, ["a", "b"], Path("runner"), Path("model"))
+        self.assertTrue(report["complete"])
+        self.assertEqual(report["disposition"], "REQUEST_CHANGES")
 
     def test_doc_context_synthesis(self):
         context = get_best_practices_context()
@@ -33,7 +149,7 @@ class TestAdversarialReviewer(unittest.TestCase):
         self.assertIn("Multi-Client Schema Invariants", context)
         self.assertEqual(len(INVARIANT_RULES), 7)
 
-    def test_compliant_diff_approval(self):
+    def test_heuristics_cannot_approve(self):
         diff = """
 --- a/src/whipit/engine.py
 +++ b/src/whipit/engine.py
@@ -41,9 +157,9 @@ class TestAdversarialReviewer(unittest.TestCase):
 +    # Clean internal logic update
 """
         disposition, findings, summary = run_heuristic_reviewer(diff, ["src/whipit/engine.py"])
-        self.assertEqual(disposition, "APPROVE")
+        self.assertEqual(disposition, "COMMENT")
         self.assertEqual(len(findings), 0)
-        self.assertIn("passed", summary)
+        self.assertIn("complete review is still required", summary)
 
     def test_runtime_dependency_violation(self):
         diff = """
