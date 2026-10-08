@@ -104,4 +104,7 @@ def load_config(
     if env_clamp is not None:
         config["auto_clamp"] = env_clamp.lower() in ("1", "true", "yes")
 
+    if config.get("mode") not in ("enforce", "advisory", "off"):
+        config["mode"] = "enforce"
+
     return MappingProxyType(config), source_path

@@ -72,7 +72,7 @@ class TestEngine(unittest.TestCase):
         self.assertEqual(decision.action, "deny")
         self.assertTrue(decision.is_autonomous_override)
         self.assertIn("Autonomous delegation override blocked", decision.reason)
-        self.assertIn("without subagents", decision.reason)
+        self.assertIn("current user turn", decision.reason)
         self.assertIn("SIMPLIFY YOUR PLAN", decision.reason)
 
     def test_allow_within_quota(self):

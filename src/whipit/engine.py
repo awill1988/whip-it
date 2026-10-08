@@ -6,8 +6,9 @@ and issues structured simplification directives to keep agent execution linear a
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional, Set
+from typing import Any, Dict, Mapping, NamedTuple, Optional, Set
+
+from .policy import DecisionRecord, DelegationInputs, decide_delegation, passive_decision
 
 DEFAULT_TOOLS: Dict[str, Set[str]] = {
     "antigravity": {"invoke_subagent", "define_subagent"},
@@ -16,8 +17,7 @@ DEFAULT_TOOLS: Dict[str, Set[str]] = {
 }
 
 
-@dataclass(frozen=True)
-class GuardrailDecision:
+class GuardrailDecision(NamedTuple):
     """Outcome of a guardrail evaluation for a tool call."""
 
     action: str  # "allow", "deny", "clamp", "advise"
@@ -27,6 +27,7 @@ class GuardrailDecision:
     allowed_count: int = 0
     attempted_count: int = 0
     spawned_so_far: int = 0
+    record: Optional[DecisionRecord] = None
 
 
 def is_subagent_tool(client: str, tool_name: str, config: Mapping[str, Any]) -> bool:
@@ -59,6 +60,19 @@ def count_planned_subagents(client: str, tool_name: str, tool_input: Dict[str, A
     return 1
 
 
+def allowed_subagents(config: Mapping[str, Any], limits: Optional[Dict[str, Any]]) -> int:
+    """Resolve a valid quota; explicit turn limits override the configured default."""
+    maximum = config.get("default_max_subagents", 0)
+    if limits and isinstance(limits, dict):
+        if not limits.get("subagents_allowed", True):
+            return 0
+        if limits.get("max_subagents") is not None:
+            maximum = limits["max_subagents"]
+    if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < 0:
+        return 0
+    return maximum
+
+
 def build_redirection_message(
     detected_phrase: Optional[str],
     max_allowed: int,
@@ -78,9 +92,8 @@ def build_redirection_message(
     override_prefix = ""
     if detected_phrase:
         override_prefix = (
-            f"WHIP IT: Autonomous delegation override blocked. "
-            f"The user prompt explicitly specified: '{detected_phrase}'. "
-            "You are prohibited from autonomously delegating or spawning subagents. "
+            "WHIP IT: Autonomous delegation override blocked. "
+            "The current user turn restricts delegation. "
         )
     else:
         override_prefix = (
@@ -112,68 +125,71 @@ def evaluate_tool_call(
         return GuardrailDecision(
             action="allow",
             reason="whip-it guardrail is disabled (mode=off).",
+            record=passive_decision("disabled"),
         )
 
     if not is_subagent_tool(client, tool_name, config):
         return GuardrailDecision(
             action="allow",
             reason="Tool is not a subagent planning or execution tool.",
+            record=passive_decision("unrelated_tool"),
         )
 
     planned_count = count_planned_subagents(client, tool_name, tool_input)
 
     # Resolve active limit
-    max_allowed = config.get("default_max_subagents", 0)
+    max_allowed = allowed_subagents(config, session_limits)
     detected_phrase: Optional[str] = None
     force_simplify = False
 
     if session_limits and isinstance(session_limits, dict):
         if not session_limits.get("subagents_allowed", True):
-            max_allowed = 0
             force_simplify = True
-        elif session_limits.get("max_subagents") is not None:
-            max_allowed = session_limits["max_subagents"]
 
-        detected_phrase = session_limits.get("detected_phrase")
+        detected_phrase = "current user turn limit"
         force_simplify = force_simplify or session_limits.get("force_simplify", False)
 
-    total_would_be = spawned_so_far + planned_count
+    subagents = tool_input.get("Subagents")
+    inputs = DelegationInputs(
+        max_allowed,
+        planned_count,
+        spawned_so_far,
+        bool(force_simplify),
+        bool(detected_phrase),
+        bool(config.get("auto_clamp", False)),
+        client == "antigravity" and tool_name == "invoke_subagent" and isinstance(subagents, list),
+        mode,
+    )
+    record = decide_delegation(inputs)
 
     # Check if within limit
-    if total_would_be <= max_allowed and not force_simplify:
+    if record.action == "allow":
         return GuardrailDecision(
             action="allow",
             reason="Subagent invocation is within permitted limits.",
             allowed_count=max_allowed,
             attempted_count=planned_count,
             spawned_so_far=spawned_so_far,
+            record=record,
         )
 
     # Limit exceeded or banned
     is_override = bool(detected_phrase)
 
     # Check if auto_clamp can reduce the count
-    auto_clamp = config.get("auto_clamp", False)
     remaining_allowed = max(0, max_allowed - spawned_so_far)
 
-    if (
-        auto_clamp
-        and remaining_allowed > 0
-        and client == "antigravity"
-        and tool_name == "invoke_subagent"
-    ):
-        subagents = tool_input.get("Subagents", [])
-        if isinstance(subagents, list) and len(subagents) > remaining_allowed:
-            clamped = subagents[:remaining_allowed]
-            return GuardrailDecision(
-                action="clamp",
-                reason=f"whip-it: Clamped subagents list to {remaining_allowed} per limits.",
-                overrides={"Subagents": clamped},
-                allowed_count=max_allowed,
-                attempted_count=planned_count,
-                spawned_so_far=spawned_so_far,
-                is_autonomous_override=is_override,
-            )
+    if record.action == "clamp":
+        return GuardrailDecision(
+            action="clamp",
+            reason=f"whip-it: Clamped subagents list to {remaining_allowed} per limits.",
+            overrides={"Subagents": subagents[:remaining_allowed]},
+            allowed_count=max_allowed,
+            attempted_count=planned_count,
+            spawned_so_far=spawned_so_far,
+            is_autonomous_override=is_override,
+            record=record,
+        )
 
     reason = build_redirection_message(
         detected_phrase=detected_phrase,
@@ -183,12 +199,11 @@ def evaluate_tool_call(
         custom_template=config.get("custom_redirection_message"),
     )
 
-    action = "advise" if mode == "advisory" else "deny"
-
     return GuardrailDecision(
-        action=action,
+        action=record.action,
         reason=reason,
         is_autonomous_override=is_override,
+        record=record,
         allowed_count=max_allowed,
         attempted_count=planned_count,
         spawned_so_far=spawned_so_far,

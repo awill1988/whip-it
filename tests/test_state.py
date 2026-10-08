@@ -5,14 +5,58 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import json
+import os
+import subprocess
 import tempfile
+import time
 import unittest
+from unittest.mock import patch
 
 from whipit.detector import PromptLimits
 from whipit.state import SessionState
 
 
 class TestSessionState(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "Windows byte-range locking")
+    def test_empty_lock_file_contends_without_writing(self):
+        import msvcrt
+
+        session = SessionState("contended", state_dir=self.state_dir)
+        session.lock_path.parent.mkdir(parents=True)
+        code = """
+import sys
+from pathlib import Path
+from whipit.state import SessionState
+print("ready", flush=True)
+SessionState("contended", state_dir=Path(sys.argv[1])).reserve_subagents(1)
+print("reserved", flush=True)
+"""
+        with session.lock_path.open("w+b") as holder:
+            msvcrt.locking(holder.fileno(), msvcrt.LK_LOCK, 1)
+            child = subprocess.Popen(
+                [sys.executable, "-c", code, str(self.state_dir)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src")),
+            )
+            try:
+                self.assertEqual(child.stdout.readline().strip(), "ready")
+                time.sleep(0.2)
+            finally:
+                msvcrt.locking(holder.fileno(), msvcrt.LK_UNLCK, 1)
+            try:
+                stdout, stderr = child.communicate(timeout=5)
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.communicate()
+            self.assertEqual(child.returncode, 0, stderr)
+            self.assertEqual(stdout.strip(), "reserved")
+            self.assertEqual(session.lock_path.stat().st_size, 0)
+            self.assertEqual(session.read()["subagents_reserved"], 1)
+
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.state_dir = Path(self.temp_dir.name)
@@ -24,7 +68,7 @@ class TestSessionState(unittest.TestCase):
         session = SessionState("test-session-1", state_dir=self.state_dir)
         data = session.read()
         self.assertEqual(data["session_id"], "test-session-1")
-        self.assertEqual(data["subagents_spawned"], 0)
+        self.assertEqual(data["subagents_reserved"], 0)
         self.assertEqual(data["overrides_blocked"], 0)
         self.assertIsNone(data["limits"])
 
@@ -38,13 +82,13 @@ class TestSessionState(unittest.TestCase):
         data = session.read()
         self.assertIsNotNone(data["limits"])
         self.assertFalse(data["limits"]["subagents_allowed"])
-        self.assertEqual(data["limits"]["detected_phrase"], "no subagents")
+        self.assertNotIn("detected_phrase", data["limits"])
 
     def test_increment_and_blocked(self):
         session = SessionState("test-session-3", state_dir=self.state_dir)
-        c1 = session.increment_spawned(1)
+        c1 = session.reserve_subagents(1)
         self.assertEqual(c1, 1)
-        c2 = session.increment_spawned(2)
+        c2 = session.reserve_subagents(2)
         self.assertEqual(c2, 3)
 
         b1 = session.record_blocked_override()
@@ -53,17 +97,57 @@ class TestSessionState(unittest.TestCase):
         self.assertEqual(b2, 2)
 
         data = session.read()
-        self.assertEqual(data["subagents_spawned"], 3)
+        self.assertEqual(data["subagents_reserved"], 3)
         self.assertEqual(data["overrides_blocked"], 2)
 
     def test_reset(self):
         session = SessionState("test-session-4", state_dir=self.state_dir)
-        session.increment_spawned(5)
+        session.reserve_subagents(5)
         self.assertTrue(session.file_path.exists())
         session.reset()
         self.assertFalse(session.file_path.exists())
         data = session.read()
-        self.assertEqual(data["subagents_spawned"], 0)
+        self.assertEqual(data["subagents_reserved"], 0)
+
+    def test_legacy_state_is_scrubbed_on_update(self):
+        session = SessionState("legacy-session", state_dir=self.state_dir)
+        session.file_path.parent.mkdir(parents=True)
+        session.file_path.write_text(
+            json.dumps(
+                {
+                    "session_id": "legacy-session",
+                    "subagents_spawned": 1,
+                    "limits": {"subagents_allowed": False, "detected_phrase": "private prompt"},
+                    "overrides_blocked": 0,
+                    "created_at": 1,
+                    "updated_at": 2,
+                }
+            )
+        )
+        session.record_blocked_override()
+        disk = session.file_path.read_text()
+        self.assertNotIn("private prompt", disk)
+        self.assertNotIn("created_at", disk)
+        self.assertEqual(session.read()["subagents_reserved"], 1)
+
+    def test_failed_replace_preserves_original_and_cleans_temporary_file(self):
+        session = SessionState("atomic", state_dir=self.state_dir)
+        session.reserve_subagents(1)
+        with patch("pathlib.Path.replace", side_effect=OSError("replace failed")):
+            with self.assertRaises(OSError):
+                session.reserve_subagents(1)
+        self.assertEqual(session.read()["subagents_reserved"], 1)
+        self.assertEqual(tuple(session.file_path.parent.glob(".*")), ())
+
+    def test_exclusive_temporary_file_does_not_overwrite_or_delete_collision(self):
+        session = SessionState("collision", state_dir=self.state_dir)
+        session.file_path.parent.mkdir(parents=True)
+        candidate = session.file_path.parent / f".{session.file_path.name}.{'00' * 16}"
+        candidate.write_text("existing")
+        with patch("whipit.state.os.urandom", return_value=b"\0" * 16):
+            with self.assertRaises(FileExistsError):
+                session.reserve_subagents(1)
+        self.assertEqual(candidate.read_text(), "existing")
 
 
 if __name__ == "__main__":

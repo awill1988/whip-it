@@ -8,9 +8,13 @@ from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Optional
 
-from .detector import analyze_prompt
-from .engine import GuardrailDecision, evaluate_tool_call, is_subagent_tool
-from .state import SessionState
+from .engine import (
+    GuardrailDecision,
+    count_planned_subagents,
+    evaluate_tool_call,
+    is_subagent_tool,
+)
+from .policy import passive_decision
 
 
 def extract_canonical(
@@ -85,13 +89,20 @@ def format_response(
 
     # Claude Code and OpenAI Codex schema
     if decision.action == "deny":
-        return {
+        response = {
             "hookSpecificOutput": {
                 "hookEventName": event,
                 "permissionDecision": "deny",
                 "permissionDecisionReason": decision.reason,
             }
         }
+        if client == "claude":
+            response["systemMessage"] = (
+                "whip-it | delegation blocked | "
+                f"{decision.spawned_so_far}/{decision.allowed_count} reserved | "
+                "continue in the main session"
+            )
+        return response
     if decision.action == "advise":
         return {
             "hookSpecificOutput": {
@@ -109,47 +120,103 @@ def process_event(
     raw_payload: Dict[str, Any],
     config: Mapping[str, Any],
     state_dir: Optional[Any] = None,
+    trace=None,
 ) -> Optional[Dict[str, Any]]:
     """Process an incoming hook event across any supported client."""
     canonical = extract_canonical(client, event, raw_payload)
-    session = SessionState(canonical["session_id"], state_dir=state_dir)
+    if trace is not None:
+        trace.identify(canonical["session_id"], event)
 
-    # 1. Inspect prompt limits on UserPromptSubmit or PreInvocation
+    def passive(reason):
+        if trace is not None:
+            trace.record = passive_decision(reason)
+
+    if config.get("mode") == "off":
+        passive("disabled")
+        return None
+
     if event in ("UserPromptSubmit", "PreInvocation"):
+        from .detector import analyze_prompt
+        from .state import SessionState
+
         prompt_text = canonical.get("prompt", "")
         if prompt_text:
-            limits = analyze_prompt(prompt_text)
-            if limits.detected_phrase:
-                session.record_prompt_limits(limits)
+            session = SessionState(canonical["session_id"], state_dir=state_dir)
+            session.record_prompt_limits(analyze_prompt(prompt_text))
+            passive("limits_updated")
+        else:
+            passive("prompt_ignored")
         return None
 
-    # 2. Process tool calls on PreToolUse
+    if client == "codex" and event == "Stop":
+        plan = raw_payload.get("last_assistant_message")
+        if raw_payload.get("permission_mode") != "plan" or not isinstance(plan, str):
+            passive("not_plan_ready")
+            return None
+        if "<proposed_plan>" not in plan or "</proposed_plan>" not in plan:
+            passive("not_plan_ready")
+            return None
+        return _assess_ready_plan(client, plan, raw_payload, trace)
+
     if event == "PreToolUse":
-        # Check prompt inside tool payload if present
-        if canonical.get("prompt"):
-            limits = analyze_prompt(canonical["prompt"])
-            if limits.detected_phrase:
-                session.record_prompt_limits(limits)
+        if client == "claude" and canonical["tool_name"] == "ExitPlanMode":
+            plan = canonical["tool_input"].get("plan")
+            return _assess_ready_plan(
+                client, plan if isinstance(plan, str) else "", raw_payload, trace
+            )
 
-        current_state = session.read()
-        decision = evaluate_tool_call(
-            client=client,
-            tool_name=canonical["tool_name"],
-            tool_input=canonical["tool_input"],
-            session_limits=current_state.get("limits"),
-            spawned_so_far=current_state.get("subagents_spawned", 0),
-            config=config,
-        )
+        if not is_subagent_tool(client, canonical["tool_name"], config):
+            passive("unrelated_tool")
+            return None
 
-        if decision.action == "deny":
-            session.record_blocked_override()
+        from .state import SessionState
 
+        session = SessionState(canonical["session_id"], state_dir=state_dir)
+
+        def decide(data: Dict[str, Any]) -> tuple[GuardrailDecision, bool]:
+            decision = evaluate_tool_call(
+                client=client,
+                tool_name=canonical["tool_name"],
+                tool_input=canonical["tool_input"],
+                session_limits=data.get("limits"),
+                spawned_so_far=data.get("subagents_reserved", 0),
+                config=config,
+            )
+            if decision.action == "deny":
+                data["overrides_blocked"] = data.get("overrides_blocked", 0) + 1
+                return decision, True
+            if decision.action in ("allow", "clamp"):
+                count = count_planned_subagents(
+                    client, canonical["tool_name"], canonical["tool_input"]
+                )
+                if decision.action == "clamp" and decision.overrides:
+                    count = len(decision.overrides["Subagents"])
+                data["subagents_reserved"] = data.get("subagents_reserved", 0) + count
+                return decision, True
+            return decision, False
+
+        decision = session.transact(decide)
+        if trace is not None:
+            trace.record = decision.record
         return format_response(client, event, decision)
 
-    # 3. Track spawned subagents on PostToolUse
-    if event == "PostToolUse":
-        if is_subagent_tool(client, canonical["tool_name"], config):
-            session.increment_spawned(1)
-        return None
+    passive("unsupported_event")
+    return None
 
+
+def _assess_ready_plan(
+    client: str,
+    plan: str,
+    payload: Dict[str, Any],
+    trace=None,
+) -> Optional[Dict[str, Any]]:
+    import time
+
+    from .plan_policy import assess_plan
+    from .usage import probe_usage
+
+    usage = probe_usage(client, payload)
+    assessment = assess_plan(plan, usage, time.time_ns() // 1_000_000)
+    if trace is not None:
+        trace.record = assessment
     return None

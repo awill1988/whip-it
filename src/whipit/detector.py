@@ -7,8 +7,7 @@ require simplification, or impose numeric quotas on subagents.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import Optional
+from typing import NamedTuple, Optional
 
 ZERO_SUBAGENT_PATTERNS = [
     # Explicit zero subagents
@@ -45,8 +44,7 @@ QUOTA_PATTERNS = [
 ]
 
 
-@dataclass(frozen=True)
-class PromptLimits:
+class PromptLimits(NamedTuple):
     """Extracted limits and simplification constraints from user prompt."""
 
     subagents_allowed: bool = True

@@ -4,13 +4,6 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - 'src/**'
-      - 'tests/**'
-      - 'pyproject.toml'
-      - 'hooks/**'
-      - 'scripts/**'
-      - 'tools/**'
   workflow_dispatch:
     inputs:
       base_ref:
@@ -20,19 +13,98 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
+
+concurrency:
+  group: adversarial-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  review_policy:
+    name: Check code-owner review exception
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      skip_review: ${{ steps.policy.outputs.skip_review }}
+    steps:
+      - uses: actions/github-script@v7
+        id: policy
+        env:
+          LINE_THRESHOLD: ${{ vars.CODEOWNER_REVIEW_LINE_THRESHOLD }}
+        with:
+          script: &owner_policy |
+            core.setOutput('skip_review', 'false');
+            if (!context.payload.pull_request || context.payload.pull_request.draft) return;
+            const raw = process.env.LINE_THRESHOLD || '1000';
+            if (!/^[0-9]+$/.test(raw)) throw new Error('configure CODEOWNER_REVIEW_LINE_THRESHOLD');
+            const threshold = Number(raw);
+            if (!Number.isSafeInteger(threshold) || threshold < 1) throw new Error('invalid line threshold');
+            const params = {...context.repo, pull_number: context.issue.number};
+            const {data: pr} = await github.rest.pulls.get(params);
+            const changed = pr.additions + pr.deletions;
+            const owner = pr.base.repo.owner;
+            let eligible = pr.state === 'open' && !pr.draft &&
+              pr.head.sha === context.payload.pull_request.head.sha &&
+              pr.head.repo.full_name === context.payload.repository.full_name &&
+              Number.isSafeInteger(changed) && changed > threshold;
+            if (!eligible) return;
+            let ownership = null;
+            for (const path of ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS']) {
+              try {
+                const {data} = await github.rest.repos.getContent({
+                  ...context.repo, path, ref: pr.base.sha
+                });
+                if (data.encoding !== 'base64' || typeof data.content !== 'string') return;
+                ownership = Buffer.from(data.content, 'base64').toString('utf8');
+                break;
+              } catch (error) {
+                if (error.status !== 404) throw error;
+              }
+            }
+            if (ownership === null) {
+              eligible = owner.type === 'User' &&
+                pr.user.login.toLowerCase() === owner.login.toLowerCase();
+            } else {
+              const rules = ownership.split(/\r?\n/).map(line => line.split('#')[0].trim()).filter(Boolean);
+              const fields = rules.length === 1 ? rules[0].split(/\s+/) : [];
+              eligible = fields.length === 2 && fields[0] === '*' &&
+                /^@[a-z0-9-]+$/i.test(fields[1]) &&
+                fields[1].slice(1).toLowerCase() === pr.user.login.toLowerCase();
+            }
+            core.setOutput('skip_review', String(eligible));
+            core.notice(`changed lines: ${changed}; threshold: ${threshold}; owner exception: ${eligible}`);
+            if (!eligible || process.env.SUBMIT_REVIEW !== 'true') return;
+            const expected = context.payload.pull_request.head.sha;
+            const marker = '<!-- whip-it-owner-review-exception -->';
+            const reviews = await github.paginate(github.rest.pulls.listReviews, params);
+            if (reviews.some(r => r.user.login === 'github-actions[bot]' &&
+                r.commit_id === expected && r.state === 'APPROVED' && r.body.includes(marker))) return;
+            const {data: current} = await github.rest.pulls.get(params);
+            if (current.head.sha !== expected || current.base.sha !== pr.base.sha ||
+                current.state !== 'open' || current.draft ||
+                current.additions !== pr.additions || current.deletions !== pr.deletions ||
+                current.user.login !== pr.user.login) return;
+            await github.rest.pulls.createReview({...params, commit_id: expected, event: 'APPROVE',
+              body: `${marker}\nreview skipped under the code-owner exception: ` +
+                `@${pr.user.login} authored ${changed} additions and deletions, exceeding ${threshold}. ` +
+                'build and test checks remain required.'});
+
   adversarial_review:
     name: Adversarial Code Review
-    if: github.event.pull_request.draft == false
+    needs: review_policy
+    if: >-
+      needs.review_policy.outputs.skip_review != 'true' &&
+      (github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 150
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -50,15 +122,113 @@ jobs:
         run: python3 tools/adversarial_reviewer/fetch_model.py
 
       - name: Run Adversarial Code Review
+        id: review
+        continue-on-error: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_REF: ${{ github.event.pull_request.base.sha || inputs.base_ref || 'origin/main' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           export LD_LIBRARY_PATH="$HOME/.cache/adversarial-reviewer/llama_runner/build/bin:$HOME/.cache/adversarial-reviewer:${LD_LIBRARY_PATH:-}"
-          BASE_REF="${{ github.event.pull_request.base.sha || inputs.base_ref || 'origin/main' }}"
-          PR_NUM="${{ github.event.pull_request.number || '' }}"
           python3 tools/adversarial_reviewer/adversarial_review.py \
             --base "$BASE_REF" \
-            --target "${PR_NUM:+PR #$PR_NUM}" \
-            ${PR_NUM:+--pr "$PR_NUM"} \
+            --head "$HEAD_SHA" \
+            --target "pull request diff" \
+            --json-output review-result/report.json \
             --summary-file "$GITHUB_STEP_SUMMARY" \
             --fail-on request-changes
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: adversarial-review-result
+          path: review-result/report.json
+          if-no-files-found: error
+
+      - name: Require completed review
+        if: steps.review.outcome != 'success'
+        run: exit 1
+
+  publish_review:
+    name: Submit pull request review
+    needs: [review_policy, adversarial_review]
+    if: >-
+      always() && !cancelled() && github.event_name == 'pull_request' &&
+      needs.review_policy.outputs.skip_review != 'true' &&
+      needs.adversarial_review.result != 'skipped' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: adversarial-review-result
+          path: review-result
+      - uses: actions/github-script@v7
+        env:
+          REVIEW_JOB_RESULT: ${{ needs.adversarial_review.result }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'review-result/report.json';
+            if (fs.statSync(path).size > 1024 * 1024) throw new Error('review report exceeds 1 MiB');
+            const report = JSON.parse(fs.readFileSync(path, 'utf8'));
+            const expected = context.payload.pull_request.head.sha;
+            if (report.commit_id !== expected) throw new Error('review commit mismatch');
+            const params = {...context.repo, pull_number: context.issue.number};
+            const {data: pr} = await github.rest.pulls.get(params);
+            if (pr.head.sha !== expected || pr.state !== 'open' || pr.draft) {
+              core.notice('review superseded or pull request not ready');
+              return;
+            }
+            const complete = report.complete === true &&
+              Number.isSafeInteger(report.total_lines) && report.total_lines > 0 &&
+              report.reviewed_lines === report.total_lines &&
+              Number.isSafeInteger(report.total_chunks) && report.total_chunks > 0 &&
+              report.completed_chunks === report.total_chunks &&
+              Array.isArray(report.chunks) && report.chunks.length === report.total_chunks &&
+              report.chunks.every(c => c.complete === true &&
+                ['APPROVE', 'COMMENT', 'REQUEST_CHANGES'].includes(c.disposition) &&
+                typeof c.summary === 'string' && c.summary.trim());
+            let event = 'COMMENT';
+            if (complete && report.chunks.some(c => c.disposition === 'REQUEST_CHANGES')) {
+              event = 'REQUEST_CHANGES';
+            } else if (complete && report.disposition === 'APPROVE' &&
+                       process.env.REVIEW_JOB_RESULT === 'success' &&
+                       report.chunks.every(c => c.disposition === 'APPROVE')) {
+              event = 'APPROVE';
+            }
+            const body = report.body;
+            if (typeof body !== 'string' || !body.trim() || body.length > 60000) {
+              throw new Error('missing or oversized review body');
+            }
+            if (/co-authored-by|generated-by|assisted-by|reviewed with|🤖/i.test(body)) {
+              throw new Error('review body contains forbidden attribution');
+            }
+            const marker = '<!-- whip-it-review -->';
+            const reviews = await github.paginate(github.rest.pulls.listReviews, params);
+            const states = {APPROVE:'APPROVED', COMMENT:'COMMENTED', REQUEST_CHANGES:'CHANGES_REQUESTED'};
+            if (reviews.some(r => r.user.login === 'github-actions[bot]' &&
+                r.commit_id === expected && r.state === states[event] && r.body.includes(marker))) {
+              core.notice('review already submitted for this commit');
+              return;
+            }
+            await github.rest.pulls.createReview({...params, commit_id: expected, event,
+              body: `${marker}\n${body}`});
+
+  approve_owner_change:
+    name: Approve code-owner change
+    needs: review_policy
+    if: needs.review_policy.outputs.skip_review == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          LINE_THRESHOLD: ${{ vars.CODEOWNER_REVIEW_LINE_THRESHOLD }}
+          SUBMIT_REVIEW: 'true'
+        with:
+          script: *owner_policy

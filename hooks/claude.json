@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Agent|Task",
+        "matcher": "Agent|Task|ExitPlanMode",
         "hooks": [
           {
             "type": "command",
@@ -18,17 +18,6 @@
           {
             "type": "command",
             "command": "whip-it --client claude --event UserPromptSubmit"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Agent|Task",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "whip-it --client claude --event PostToolUse"
           }
         ]
       }

@@ -55,3 +55,6 @@ coverage.xml
 state/
 runtime/
 *.tmp
+
+# Native build artifacts
+/target/

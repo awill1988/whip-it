@@ -22,13 +22,12 @@
         ]
       }
     ],
-    "PostToolUse": [
+    "Stop": [
       {
-        "matcher": "spawn_agent|subagent|agent",
         "hooks": [
           {
             "type": "command",
-            "command": "whip-it --client codex --event PostToolUse"
+            "command": "whip-it --client codex --event Stop"
           }
         ]
       }

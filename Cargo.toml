@@ -1,0 +1,24 @@
+[package]
+name = "whip-it"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT"
+
+[[bin]]
+name = "whip-it"
+path = "native/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+regex = "1"
+tempfile = "3"
+getrandom = "0.3"
+time = { version = "0.3", features = ["parsing"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
