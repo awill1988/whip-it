@@ -1,8 +1,4 @@
-"""Multi-client event normalization and response formatting for whip-it.
-
-Adapts between Claude Code, Antigravity CLI, and Codex native hook schemas,
-preserving native tool flow when allowed and translating decisions cleanly.
-"""
+"""Translate hook contracts while preserving native permissions for allowed calls."""
 
 from __future__ import annotations
 

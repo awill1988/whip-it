@@ -1,8 +1,4 @@
-"""Atomic session state management for whip-it.
-
-Persists subagent counts, active prompt limits, and blocked override metrics
-without requiring external database daemons or network services.
-"""
+"""Serialize session quota updates without retaining prompt content."""
 
 from __future__ import annotations
 
@@ -166,7 +162,6 @@ class SessionState:
         return self.transact(update)
 
     def reset(self) -> None:
-        """Clear session state."""
         with self._lock():
             try:
                 self.file_path.unlink(missing_ok=True)

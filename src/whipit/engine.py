@@ -1,8 +1,4 @@
-"""Core guardrail evaluation engine for whip-it.
-
-Enforces subagent delegation limits, detects autonomous prompt override attempts,
-and issues structured simplification directives to keep agent execution linear and bounded.
-"""
+"""Enforce delegation limits and return constructive simplification guidance."""
 
 from __future__ import annotations
 
@@ -45,7 +41,6 @@ def is_subagent_tool(client: str, tool_name: str, config: Mapping[str, Any]) -> 
     if tool_name in defaults:
         return True
 
-    # Generic fallback: if tool name contains "subagent" or "spawn_agent"
     normalized = tool_name.lower().replace("-", "_")
     return "subagent" in normalized or "spawn_agent" in normalized
 
@@ -137,7 +132,6 @@ def evaluate_tool_call(
 
     planned_count = count_planned_subagents(client, tool_name, tool_input)
 
-    # Resolve active limit
     max_allowed = allowed_subagents(config, session_limits)
     detected_phrase: Optional[str] = None
     force_simplify = False
@@ -162,7 +156,6 @@ def evaluate_tool_call(
     )
     record = decide_delegation(inputs)
 
-    # Check if within limit
     if record.action == "allow":
         return GuardrailDecision(
             action="allow",
@@ -173,10 +166,8 @@ def evaluate_tool_call(
             record=record,
         )
 
-    # Limit exceeded or banned
     is_override = bool(detected_phrase)
 
-    # Check if auto_clamp can reduce the count
     remaining_allowed = max(0, max_allowed - spawned_so_far)
 
     if record.action == "clamp":

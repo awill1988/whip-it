@@ -1,8 +1,4 @@
-"""Configuration loader and resolution for whip-it.
-
-Supports workspace overrides (.whip-it.json), user configuration,
-and environment variables with zero external dependencies.
-"""
+"""Resolve configuration files and environment overrides without external services."""
 
 from __future__ import annotations
 
@@ -48,14 +44,9 @@ def load_config(
     explicit_path: Optional[str] = None,
     cwd: Optional[Path] = None,
 ) -> Tuple[MappingProxyType, Optional[Path]]:
-    """Load and merge configuration from files, environment, and defaults.
+    """Use the first valid file: explicit, workspace, environment path, then user.
 
-    Precedence:
-    1. Explicit config path argument
-    2. Local workspace .whip-it.json or .whip-it/config.json in cwd
-    3. WHIP_IT_CONFIG environment variable
-    4. User config file (~/.config/whip-it/config.json)
-    5. Built-in defaults
+    Merge that file over defaults, then apply recognized environment overrides.
     """
     config: Dict[str, Any] = json.loads(json.dumps(DEFAULT_CONFIG))
     source_path: Optional[Path] = None
@@ -80,7 +71,6 @@ def load_config(
             try:
                 data = json.loads(candidate.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
-                    # Shallow merge with nested dict handling
                     for k, v in data.items():
                         if isinstance(v, dict) and isinstance(config.get(k), dict):
                             config[k].update(v)
@@ -91,7 +81,6 @@ def load_config(
             except (ValueError, OSError):
                 continue
 
-    # Apply environment variable overrides
     env_mode = os.environ.get("WHIP_IT_MODE")
     if env_mode in ("enforce", "advisory", "off"):
         config["mode"] = env_mode

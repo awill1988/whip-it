@@ -1,8 +1,4 @@
-"""Command line interface and hook supervisor for whip-it.
-
-Provides hook execution for Claude Code, Antigravity CLI, and Codex CLI,
-plus diagnostic utilities for testing prompt constraints and inspecting state.
-"""
+"""Bound hook execution and expose local guardrail diagnostics."""
 
 from __future__ import annotations
 
@@ -17,7 +13,6 @@ MAX_PAYLOAD_BYTES = 1024 * 1024  # 1 MiB
 
 
 def handle_test_prompt(prompt: str) -> int:
-    """Diagnostic command to inspect prompt limit detection."""
     from .detector import analyze_prompt
 
     limits = analyze_prompt(prompt)
@@ -66,7 +61,6 @@ def handle_status(session_id: str | None = None) -> int:
 
 
 def handle_reset(session_id: str) -> int:
-    """Reset state for a specific session."""
     from .state import SessionState
 
     session = SessionState(session_id)
@@ -76,7 +70,6 @@ def handle_reset(session_id: str) -> int:
 
 
 def handle_config(explicit_path: str | None = None) -> int:
-    """Print the resolved configuration."""
     from .config import load_config
 
     config, source = load_config(explicit_path=explicit_path)
@@ -110,7 +103,6 @@ def _hook_options(args):
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Entry point for whip-it CLI and hook execution."""
     args_list = argv if argv is not None else sys.argv[1:]
     options = _hook_options(args_list)
     if options is not None:
@@ -156,7 +148,6 @@ def main(argv: list[str] | None = None) -> int:
 
     parsed = parser.parse_args(args_list)
 
-    # Subcommand routing
     if parsed.subcommand == "test-prompt":
         return handle_test_prompt(parsed.prompt)
     if parsed.subcommand == "status":
@@ -172,7 +163,6 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, indent=2))
         return status
 
-    # Hook mode: must have --client
     if not parsed.client:
         parser.print_help()
         return 0
@@ -236,7 +226,6 @@ def _run_hook(client, event, config_path):
         if trace is not None:
             trace.mark("input")
 
-        # Event name resolution: payload field or CLI flag
         event_name = payload.get("hook_event_name") or payload.get("hookEventName") or event
 
         from .adapters import process_event
