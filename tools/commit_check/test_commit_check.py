@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import sys
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -13,12 +15,54 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from commit_check import (
     GITHUB_ACTIONS_COAUTHOR,
     check_github_merge,
+    check_range,
     main,
     validate,
 )
 
 
 class TestCommitCheck(unittest.TestCase):
+    def test_merge_headers_are_skipped_but_child_commits_are_checked(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run = subprocess.run
+
+            def git(*args, input=None):
+                return run(
+                    ["git", "-C", directory, *args],
+                    input=input,
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                ).stdout.strip()
+
+            git("init", "--quiet")
+            git("config", "user.name", "Test")
+            git("config", "user.email", "test@example.invalid")
+            tree = git("mktree", input="")
+            base = git("commit-tree", tree, "-m", "chore: base")
+            first = git("commit-tree", tree, "-p", base, "-m", "docs: first")
+            for subject, valid in (("fix: valid child", True), ("Invalid child", False)):
+                child = git("commit-tree", tree, "-p", base, "-m", subject)
+                merge = git(
+                    "commit-tree",
+                    tree,
+                    "-p",
+                    first,
+                    "-p",
+                    child,
+                    "-m",
+                    "Merge pull request #2 from example/branch",
+                )
+                with patch(
+                    "commit_check.subprocess.run",
+                    side_effect=lambda *a, **kw: run(*a, cwd=directory, **kw),
+                ):
+                    if valid:
+                        check_range(base, merge)
+                    else:
+                        with self.assertRaisesRegex(ValueError, child):
+                            check_range(base, merge)
+
     def test_accepts_supported_messages(self) -> None:
         cases = [
             "feat: add release pipeline",

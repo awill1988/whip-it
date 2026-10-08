@@ -127,9 +127,9 @@ def validate_named(name: str, message: str) -> None:
 
 
 def check_range(from_rev: str, to_rev: str, allow_github_footer: bool = False) -> None:
-    """validate all commits in the git revision range."""
+    """validate non-merge commits, including commits introduced by merges."""
     rev_range = f"{from_rev}..{to_rev}"
-    cmd = ["git", "log", "-z", "--format=%H%x00%B", rev_range]
+    cmd = ["git", "log", "--no-merges", "-z", "--format=%H%x00%B", rev_range]
     result = subprocess.run(cmd, capture_output=True, text=False)
 
     if result.returncode != 0:
