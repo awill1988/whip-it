@@ -107,10 +107,10 @@ token rate, and the agent still has to follow the redirection.
 Illustrative feedback for an exhausted delegation quota:
 
 ```text
-whip-it | delegation paused · continue here
-check: deterministic rule · no model call
+whip-it | delegation paused | continue here
+check: deterministic rule | no model call
 source: configured quota
-limit: 2 · reserved: 2 · requested: 1
+limit: 2 | reserved: 2 | requested: 1
 next: keep working here in smaller, sequential steps; use direct tools
 ```
 

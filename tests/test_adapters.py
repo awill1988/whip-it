@@ -77,17 +77,17 @@ class TestAdapters(unittest.TestCase):
                 if client == "claude":
                     self.assertEqual(
                         resp.pop("systemMessage"),
-                        "whip-it | delegation paused · continue here\n"
-                        "check: deterministic rule · no model call\n"
+                        "whip-it | delegation paused | continue here\n"
+                        "check: deterministic rule | no model call\n"
                         "source: configured quota\n"
-                        "limit: 2 · reserved: 2 · requested: 1\n"
+                        "limit: 2 | reserved: 2 | requested: 1\n"
                         "next: keep working here in smaller, sequential steps; use direct tools",
                     )
                 output = resp["hookSpecificOutput"]
                 self.assertEqual(output["hookEventName"], "PreToolUse")
                 self.assertEqual(output["permissionDecision"], "deny")
                 self.assertIn(
-                    "limit: 2 · reserved: 2 · requested: 1", output["permissionDecisionReason"]
+                    "limit: 2 | reserved: 2 | requested: 1", output["permissionDecisionReason"]
                 )
                 self.assertTrue(
                     output["permissionDecisionReason"].endswith("\n\nBlocked by whip-it")
@@ -122,7 +122,7 @@ class TestAdapters(unittest.TestCase):
         self.assertIn("current user turn", hook_out["permissionDecisionReason"])
         self.assertIn("SIMPLIFY YOUR PLAN", hook_out["permissionDecisionReason"])
         self.assertIn("source: current prompt", r2["systemMessage"])
-        self.assertIn("limit: 0 · reserved: 0 · requested: 1", r2["systemMessage"])
+        self.assertIn("limit: 0 | reserved: 0 | requested: 1", r2["systemMessage"])
         self.assertIn(r2["systemMessage"], hook_out["permissionDecisionReason"])
 
     def test_redirection_preserves_custom_guidance_and_direct_execution(self):
@@ -146,7 +146,7 @@ class TestAdapters(unittest.TestCase):
                     if client == "antigravity"
                     else response["hookSpecificOutput"]["permissionDecisionReason"]
                 )
-                self.assertIn("check: deterministic rule · no model call", reason)
+                self.assertIn("check: deterministic rule | no model call", reason)
                 self.assertIn(f"requested: {3 if client == 'antigravity' else 1}", reason)
                 self.assertIn("next: keep working here", reason)
                 self.assertTrue(reason.endswith("work locally; cap 0"))

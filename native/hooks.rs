@@ -258,7 +258,7 @@ fn response(
         "configured quota"
     };
     let summary = format!(
-        "whip-it | delegation paused · continue here\ncheck: deterministic rule · no model call\nsource: {source}\nlimit: {} · reserved: {} · requested: {}\nnext: keep working here in smaller, sequential steps; use direct tools",
+        "whip-it | delegation paused | continue here\ncheck: deterministic rule | no model call\nsource: {source}\nlimit: {} | reserved: {} | requested: {}\nnext: keep working here in smaller, sequential steps; use direct tools",
         inputs.allowed, inputs.reserved, inputs.attempted
     );
     if decision.action == "deny" {

@@ -63,10 +63,10 @@ def format_response(
 
     source = "current prompt" if decision.is_autonomous_override else "configured quota"
     summary = (
-        "whip-it | delegation paused · continue here\n"
-        "check: deterministic rule · no model call\n"
+        "whip-it | delegation paused | continue here\n"
+        "check: deterministic rule | no model call\n"
         f"source: {source}\n"
-        f"limit: {decision.allowed_count} · reserved: {decision.spawned_so_far} · "
+        f"limit: {decision.allowed_count} | reserved: {decision.spawned_so_far} | "
         f"requested: {decision.attempted_count}\n"
         "next: keep working here in smaller, sequential steps; use direct tools"
     )
