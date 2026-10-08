@@ -48,13 +48,13 @@ class TestAdversarialReviewer(unittest.TestCase):
                 self.assertEqual(disposition, "COMMENT")
                 self.assertIn("review incomplete", summary)
 
-    def test_runner_requires_explicit_disposition_with_rationale(self):
+    def test_runner_requires_completed_assessment_with_rationale(self):
         with patch(
             "adversarial_review.subprocess.run",
             return_value=subprocess.CompletedProcess(
                 [],
                 0,
-                '{"disposition":"APPROVE","rationale":"the changed branch preserves the existing limit check.","findings":[]} [end of text]',
+                '{"assessed":true,"rationale":"the changed branch preserves the existing limit check.","findings":[]} [end of text]',
                 "",
             ),
         ):
@@ -80,7 +80,7 @@ class TestAdversarialReviewer(unittest.TestCase):
             return_value=subprocess.CompletedProcess(
                 [],
                 0,
-                '{"disposition":"APPROVE","rationale":"no defect in the changed expression","findings":[]}',
+                '{"assessed":true,"rationale":"no defect in the changed expression","findings":[]}',
                 "",
             ),
         ) as runner:

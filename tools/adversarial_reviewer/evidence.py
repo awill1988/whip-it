@@ -2,7 +2,7 @@
 
 import re
 
-FIELDS = {"file", "line", "evidence", "invariant", "scenario", "correction"}
+FIELDS = {"location", "invariant", "scenario", "correction"}
 
 
 def locations(diff):
@@ -28,13 +28,11 @@ def repetitive(text):
 
 
 def validate(response, anchors):
-    if not isinstance(response, dict) or set(response) != {"disposition", "rationale", "findings"}:
+    if not isinstance(response, dict) or set(response) != {"assessed", "rationale", "findings"}:
         raise ValueError("invalid response fields")
-    disposition, rationale, findings = (
-        response[k] for k in ("disposition", "rationale", "findings")
-    )
-    if disposition not in ("APPROVE", "COMMENT", "REQUEST_CHANGES"):
-        raise ValueError("invalid disposition")
+    assessed, rationale, findings = (response[k] for k in ("assessed", "rationale", "findings"))
+    if type(assessed) is not bool or not assessed:
+        raise ValueError("model could not assess the change")
     if (
         not isinstance(rationale, str)
         or not 10 <= len(rationale.strip()) <= 1200
@@ -43,16 +41,16 @@ def validate(response, anchors):
         raise ValueError("missing or repetitive rationale")
     if not isinstance(findings, list) or len(findings) > 3:
         raise ValueError("invalid findings")
-    if (disposition == "REQUEST_CHANGES") != bool(findings):
-        raise ValueError("blocking verdict requires findings")
+    disposition = "REQUEST_CHANGES" if findings else "APPROVE"
+    grounded = []
     for finding in findings:
         if not isinstance(finding, dict) or set(finding) != FIELDS:
             raise ValueError("incomplete finding")
-        if type(finding["line"]) is not int or finding["line"] <= 0:
-            raise ValueError("invalid line")
-        if not any(all(finding[k] == a[k] for k in ("file", "line", "evidence")) for a in anchors):
-            raise ValueError("evidence does not match reviewed code")
-        if not finding["evidence"].strip():
+        location = finding["location"]
+        if type(location) is not int or not 1 <= location <= len(anchors):
+            raise ValueError("invalid evidence location")
+        anchor = anchors[location - 1]
+        if not anchor["evidence"].strip():
             raise ValueError("empty evidence")
         for field in ("invariant", "scenario", "correction"):
             value = finding[field]
@@ -62,4 +60,5 @@ def validate(response, anchors):
                 or repetitive(value)
             ):
                 raise ValueError("missing or repetitive explanation")
-    return disposition, rationale.strip(), findings
+        grounded.append({**finding, **anchor})
+    return disposition, rationale.strip(), grounded

@@ -15,13 +15,11 @@ class TestEvidence(unittest.TestCase):
             ).values()
         )
         self.report = {
-            "disposition": "REQUEST_CHANGES",
+            "assessed": True,
             "rationale": "the default input divides by zero.",
             "findings": [
                 {
-                    "file": "a.py",
-                    "line": 1,
-                    "evidence": "def divide(n=0):",
+                    "location": 1,
                     "invariant": "default calls must return a result",
                     "scenario": "calling divide() raises ZeroDivisionError",
                     "correction": "reject zero or remove the invalid default",
@@ -34,7 +32,7 @@ class TestEvidence(unittest.TestCase):
         self.assertEqual(
             validate(
                 {
-                    "disposition": "APPROVE",
+                    "assessed": True,
                     "rationale": "no defect identified in this change",
                     "findings": [],
                 },
@@ -43,13 +41,16 @@ class TestEvidence(unittest.TestCase):
             "APPROVE",
         )
         self.assertEqual(self.anchors[-1]["line"], 2)
+        finding = validate(self.report, self.anchors)[2][0]
+        self.assertEqual(finding["file"], "a.py")
+        self.assertEqual(finding["line"], 1)
+        self.assertEqual(finding["evidence"], "def divide(n=0):")
 
     def test_fabricated_and_incomplete_findings_are_rejected(self):
         for field, value in (
-            ("file", "other.py"),
-            ("line", 5),
-            ("line", True),
-            ("evidence", "invented code"),
+            ("location", 0),
+            ("location", 5),
+            ("location", True),
             ("scenario", "to"),
             ("correction", "this is not in line with the repository guidelines. " * 5),
         ):
@@ -67,11 +68,11 @@ class TestEvidence(unittest.TestCase):
                 },
                 self.anchors,
             )
-        report = dict(self.report, findings=[])
+        report = dict(self.report, assessed=False, findings=[])
         with self.assertRaises(ValueError):
             validate(report, self.anchors)
 
-    def test_approval_cannot_hide_findings(self):
+    def test_model_cannot_override_verdict_with_an_approval_field(self):
         with self.assertRaises(ValueError):
             validate(dict(self.report, disposition="APPROVE"), self.anchors)
 
