@@ -5,6 +5,19 @@ It enforces subagent limits and explicit prompt constraints, returning instructi
 to continue in the main session when delegation is blocked. Allowed calls produce
 empty stdout, preserving the client's normal permission flow.
 
+## Privacy and performance
+
+The normal executable contains no telemetry collection or export code and makes
+no network requests. Decisions run locally using a deterministic policy model.
+It stores local quota state and numeric usage snapshots; it may read local client
+usage metadata, but does not persist prompts, tool arguments, or transcript contents.
+Installation downloads and the host coding assistant have their own network behavior.
+
+The full hook process targets **under 15 ms**. This is a target, not a universal
+deadline: see [reproducible benchmarks](benchmarks/README.md) for measured
+percentiles, workload coverage, and platform results. The separate offline
+softmax classifier is experimental and does not make hook admission decisions.
+
 ## Installation
 
 Install from source with Git and a current stable Rust toolchain (Rust 1.89 or
@@ -15,7 +28,7 @@ a C toolchain on Linux, or Visual Studio C++ Build Tools for Windows MSVC.
 ```sh
 git clone https://github.com/awill1988/whip-it.git
 cd whip-it
-cargo install --path . --locked
+cargo install --path . --locked --no-default-features
 whip-it --version
 ```
 
@@ -56,6 +69,7 @@ whip-it test-prompt "keep it simple, no subagents"
 whip-it status
 ```
 
+Try the [synthetic allow/deny examples](examples/README.md).
 See the [usage guide](docs/usage.md) for configuration, state, and diagnostics.
 Plan and usage assessment depend on available metadata; see
 [decision tracing](docs/decision-tracing.md) for coverage and limitations.

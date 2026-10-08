@@ -51,7 +51,7 @@ rather than arbitrary child configurations in every client.
 | `WHIP_IT_CONFIG_DIR` | Override user configuration directory |
 | `WHIP_IT_STATE_DIR` | Override session state directory |
 | `WHIP_IT_CACHE_DIR` | Override usage observation cache directory |
-| `WHIP_IT_TRACE` | `otlp_json` emits decision spans to stderr |
+| `WHIP_IT_TRACE` | Diagnostic builds/Python only: `otlp_json` emits spans to stderr |
 | `LOG_LEVEL` | Defaults to `ERROR`; `WARNING` exposes untraced fail-open diagnostics |
 
 Unix defaults are `~/.config/whip-it`, `~/.local/state/whip-it`, and
@@ -77,11 +77,18 @@ empty stdout; denials return client-specific simplification instructions.
 A process watchdog bounds hook execution (five seconds by default), including
 stalled input or trace delivery. Fail-open exits can lose diagnostics.
 
-Tracing is opt-in and content-free; collection runs outside the hook.
-Replay captured spans with:
+Normal executables contain no trace collection or replay code. Setting
+`WHIP_IT_TRACE` cannot enable it. Developers can explicitly build diagnostics:
 
 ```sh
-whip-it evaluate decisions.jsonl
+cargo build --locked --release --features diagnostics --target-dir target/diagnostics
+```
+
+Only that binary (or the Python reference) supports tracing and replay. Trace
+export remains external. Replay captured spans with the diagnostic executable:
+
+```sh
+target/diagnostics/release/whip-it evaluate decisions.jsonl
 whip-it evaluate decisions.jsonl --expectations labels.jsonl
 ```
 
@@ -126,9 +133,12 @@ Run the [README checks](../README.md#development), then the additional tool suit
 ```sh
 poetry run python -m unittest discover -s tools/adversarial_reviewer
 python tools/commit_check/test_commit_check.py
-cargo build --locked --release
+cargo build --locked --release --no-default-features
+python scripts/verify_release.py --executable target/release/whip-it --depfile target/release/whip-it.d
 python scripts/verify_native.py --executable target/release/whip-it
-python scripts/verify_observations.py --executable target/release/whip-it
+cargo build --locked --release --features diagnostics --target-dir target/diagnostics
+python scripts/verify_native.py --executable target/diagnostics/release/whip-it --diagnostics
+python scripts/verify_observations.py --executable target/diagnostics/release/whip-it
 poetry build
 ```
 
@@ -147,9 +157,10 @@ install the exact `dist/whip_it-<version>-py3-none-any.whl` file with
 Use synthetic inputs and isolated state:
 
 ```sh
-python scripts/benchmark_hooks.py --executable target/release/whip-it --samples 30
+python benchmarks/run.py --executable target/release/whip-it --samples 100 --observations
 ```
 
+See [benchmark methodology](../benchmarks/README.md) for scenarios and platform reports.
 The report separates full process wall time from Python startup. Existing
 [latency measurements](decision-tracing.md#latency-measurement) describe the
 Python reference; they are not native Rust measurements.

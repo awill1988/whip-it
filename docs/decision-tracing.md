@@ -4,9 +4,21 @@ A decision span records the numeric inputs and rule outcome for one hook
 invocation. It lets reviewers inspect enforcement and replay policy decisions
 without retaining a prompt, plan, or tool payload.
 
-Tracing is disabled by default. `WHIP_IT_TRACE=otlp_json` emits one compact
+Normal native executables contain no tracing or replay code. For developer
+evaluation, build a separate diagnostic executable:
+
+```sh
+cargo build --locked --release --features diagnostics --target-dir target/diagnostics
+```
+
+In the examples below, `whip-it` means that diagnostic executable on your
+`PATH`, or the Python reference. Never substitute it for a distributed release.
+The compile-time boundary is recorded in
+[ADR 0004](adr/0004-exclude-diagnostics-from-distributed-executables.md).
+
+Tracing in diagnostic builds is disabled by default. `WHIP_IT_TRACE=otlp_json` emits one compact
 [OTLP JSON trace request](https://opentelemetry.io/docs/specs/otlp/) per line on
-stderr. The hook uses the standard library and performs no network export.
+stderr. The hook performs no network export.
 An external process owns capture, retention, and delivery to a collector.
 
 ## Capture
