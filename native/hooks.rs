@@ -8,8 +8,22 @@ use serde_json::{Value, json};
 
 pub struct Outcome {
     pub response: Option<Value>,
+    #[cfg(feature = "diagnostics")]
     pub decision: Decision,
+    #[cfg(feature = "diagnostics")]
     pub session: String,
+}
+
+impl Outcome {
+    fn new(response: Option<Value>, _decision: Decision, _session: String) -> Self {
+        Self {
+            response,
+            #[cfg(feature = "diagnostics")]
+            decision: _decision,
+            #[cfg(feature = "diagnostics")]
+            session: _session,
+        }
+    }
 }
 
 pub fn process(
@@ -31,11 +45,7 @@ pub fn process(
     .filter(|s| !s.is_empty())
     .unwrap_or("default")
     .to_owned();
-    let passive = |reason| Outcome {
-        response: None,
-        decision: Decision::passive(reason),
-        session: session.clone(),
-    };
+    let passive = |reason| Outcome::new(None, Decision::passive(reason), session.clone());
     if config["mode"] == "off" {
         return Ok(passive("disabled"));
     }
@@ -82,22 +92,14 @@ pub fn process(
     };
     if let Some(plan) = plan {
         if let Some(decision) = observed(client, &session, payload, now, model) {
-            return Ok(Outcome {
-                response: None,
-                decision,
-                session,
-            });
+            return Ok(Outcome::new(None, decision, session));
         }
         let inputs = if client == "codex" {
             usage::read(payload["transcript_path"].as_str(), now, plan.len())
         } else {
             UsageInputs::missing(now, plan.len().div_ceil(4) as i64)
         };
-        return Ok(Outcome {
-            response: None,
-            decision: policy::usage(&inputs)?,
-            session,
-        });
+        return Ok(Outcome::new(None, policy::usage(&inputs)?, session));
     }
     if event != "PreToolUse" {
         return Ok(passive("unsupported_event"));
@@ -156,15 +158,15 @@ pub fn process(
             ((decision, response), changed)
         })
         .map_err(|_| "internal_error")?;
-    Ok(Outcome {
+    Ok(Outcome::new(
         response,
-        decision: if let Some(usage) = observed(client, &session, payload, now, model) {
+        if let Some(usage) = observed(client, &session, payload, now, model) {
             observation::attach(decision, usage)
         } else {
             decision
         },
         session,
-    })
+    ))
 }
 
 fn observed(

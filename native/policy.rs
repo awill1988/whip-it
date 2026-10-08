@@ -7,6 +7,7 @@ pub struct Decision {
     pub action: &'static str,
     pub recommendation: &'static str,
     pub reason: &'static str,
+    #[cfg(any(feature = "diagnostics", test))]
     pub inputs: Value,
     pub signals: Value,
 }
@@ -18,6 +19,7 @@ impl Decision {
             action: "allow",
             recommendation: "allow",
             reason,
+            #[cfg(any(feature = "diagnostics", test))]
             inputs: json!({}),
             signals: json!({}),
         }
@@ -67,6 +69,7 @@ pub fn delegation(input: &DelegationInputs) -> Decision {
         },
         recommendation,
         reason,
+        #[cfg(any(feature = "diagnostics", test))]
         inputs: serde_json::to_value(input).expect("integer policy inputs"),
         signals: json!({}),
     }
@@ -232,6 +235,7 @@ pub fn usage(input: &UsageInputs) -> Result<Decision, &'static str> {
             "allow"
         },
         reason: "usage_observed",
+        #[cfg(any(feature = "diagnostics", test))]
         inputs: values,
         signals,
     })

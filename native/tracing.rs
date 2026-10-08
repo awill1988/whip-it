@@ -5,13 +5,6 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-pub fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
-}
-
 pub struct Trace {
     start: Instant,
     epoch_ns: u128,
