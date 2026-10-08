@@ -54,7 +54,7 @@ class TestAdversarialReviewer(unittest.TestCase):
             return_value=subprocess.CompletedProcess(
                 [],
                 0,
-                '{"disposition":"APPROVE","rationale":"the changed branch preserves the existing limit check."} [end of text]',
+                '{"disposition":"APPROVE","rationale":"the changed branch preserves the existing limit check.","findings":[]} [end of text]',
                 "",
             ),
         ):
