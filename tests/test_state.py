@@ -6,7 +6,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import json
+import os
+import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -15,6 +18,45 @@ from whipit.state import SessionState
 
 
 class TestSessionState(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "Windows byte-range locking")
+    def test_empty_lock_file_contends_without_writing(self):
+        import msvcrt
+
+        session = SessionState("contended", state_dir=self.state_dir)
+        session.lock_path.parent.mkdir(parents=True)
+        code = """
+import sys
+from pathlib import Path
+from whipit.state import SessionState
+print("ready", flush=True)
+SessionState("contended", state_dir=Path(sys.argv[1])).reserve_subagents(1)
+print("reserved", flush=True)
+"""
+        with session.lock_path.open("w+b") as holder:
+            msvcrt.locking(holder.fileno(), msvcrt.LK_LOCK, 1)
+            child = subprocess.Popen(
+                [sys.executable, "-c", code, str(self.state_dir)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src")),
+            )
+            try:
+                self.assertEqual(child.stdout.readline().strip(), "ready")
+                time.sleep(0.2)
+            finally:
+                msvcrt.locking(holder.fileno(), msvcrt.LK_UNLCK, 1)
+            try:
+                stdout, stderr = child.communicate(timeout=5)
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.communicate()
+            self.assertEqual(child.returncode, 0, stderr)
+            self.assertEqual(stdout.strip(), "reserved")
+            self.assertEqual(session.lock_path.stat().st_size, 0)
+            self.assertEqual(session.read()["subagents_reserved"], 1)
+
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.state_dir = Path(self.temp_dir.name)

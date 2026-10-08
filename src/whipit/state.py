@@ -56,9 +56,7 @@ class SessionState:
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         with self.lock_path.open("a+b") as lock_file:
             if sys.platform == "win32":
-                if lock_file.tell() == 0 and self.lock_path.stat().st_size == 0:
-                    lock_file.write(b"\0")
-                    lock_file.flush()
+                # Windows permits locks beyond EOF; writing first races with other holders.
                 lock_file.seek(0)
                 msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
             else:

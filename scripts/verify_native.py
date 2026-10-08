@@ -281,7 +281,11 @@ def verify(executable):
 
         with ThreadPoolExecutor(max_workers=8) as pool:
             results = list(pool.map(race, range(8)))
-        assert sum(not result.stdout for result in results) == 2
+        diagnostics = [
+            {"runtime": "native" if i % 2 else "python", "stdout": r.stdout, "stderr": r.stderr}
+            for i, r in enumerate(results)
+        ]
+        assert sum(not result.stdout for result in results) == 2, diagnostics
         state = json.loads(next((shared / "sessions").glob("*.json")).read_text())
         assert state["subagents_reserved"] == 2 and state["overrides_blocked"] == 6
 
