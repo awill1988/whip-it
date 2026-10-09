@@ -77,6 +77,10 @@ def main():
             flush=True,
         )
         if not valid:
+            message = (
+                f"{name}: {summary}".replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            )
+            print(f"::error title=kimi reviewer qualification failed::{message}", flush=True)
             return 1
     return 0
 

@@ -102,7 +102,9 @@ jobs:
 
   adversarial_review:
     name: Adversarial Code Review
-    environment: default
+    environment:
+      name: default
+      deployment: false
     outputs:
       report_artifact: ${{ steps.report.outputs.artifact-id }}
     needs: review_policy
