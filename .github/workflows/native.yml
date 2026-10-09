@@ -15,7 +15,27 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      required: ${{ steps.scope.outputs.required }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          FORCE_BUILD: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          args=()
+          if [ "$FORCE_BUILD" = true ]; then args+=(--force); fi
+          python3 scripts/native_changes.py --base "$BASE_SHA" --head "$HEAD_SHA" "${args[@]}"
+
   build:
+    needs: changes
+    name: build (${{ matrix.runner }}, ${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
@@ -32,30 +52,35 @@ jobs:
             target: x86_64-pc-windows-msvc
           - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ needs.changes.outputs.required == 'true' && matrix.runner || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.required == 'true'
       - uses: actions/setup-python@v5
+        if: needs.changes.outputs.required == 'true'
         with:
           python-version: "3.13"
       - name: install toolchain
+        if: needs.changes.outputs.required == 'true'
         shell: bash
         run: |
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
           rustup default stable
           rustup target add "${{ matrix.target }}"
       - name: install musl linker
-        if: runner.os == 'Linux'
+        if: needs.changes.outputs.required == 'true' && runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools strace
           echo 'RUSTFLAGS=-C linker=musl-gcc' >> "$GITHUB_ENV"
       - name: format and lint
+        if: needs.changes.outputs.required == 'true'
         run: |
           cargo fmt --check
           cargo clippy --locked --all-targets --no-default-features --target ${{ matrix.target }} -- -D warnings
           cargo clippy --locked --all-targets --features diagnostics --target ${{ matrix.target }} -- -D warnings
       - name: test and build
+        if: needs.changes.outputs.required == 'true'
         run: |
           python -m unittest tests.test_state
           cargo test --locked --no-default-features --target ${{ matrix.target }}
@@ -63,6 +88,7 @@ jobs:
           cargo build --locked --release --no-default-features --target ${{ matrix.target }}
           cargo build --locked --release --features diagnostics --target-dir target/diagnostics --target ${{ matrix.target }}
       - name: verify and package
+        if: needs.changes.outputs.required == 'true'
         shell: bash
         run: |
           binary="target/${{ matrix.target }}/release/whip-it"
@@ -80,6 +106,7 @@ jobs:
           python scripts/package_native.py --binary "$binary" --target "${{ matrix.target }}" --output dist/native
           python scripts/package_plugin.py --binary "$binary" --target "${{ matrix.target }}" --output dist/native
       - name: verify installer
+        if: needs.changes.outputs.required == 'true'
         shell: bash
         run: |
           binary="target/${{ matrix.target }}/release/whip-it"
@@ -89,19 +116,24 @@ jobs:
           python -m unittest discover -s tests -p 'test_installers.py'
           python -m unittest tests.test_plugin_bundle
       - uses: actions/upload-artifact@v4
+        if: needs.changes.outputs.required == 'true'
         with:
           name: benchmark-${{ matrix.target }}
           path: dist/benchmarks/*
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
+        if: needs.changes.outputs.required == 'true'
         with:
           name: whip-it-${{ matrix.target }}
           path: dist/native/*
           if-no-files-found: error
+      - name: native inputs unchanged
+        if: needs.changes.outputs.required != 'true'
+        run: echo 'native inputs unchanged; build and platform verification not required'
 
   publish:
-    needs: [build, universal_macos]
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.publish == true)
+    needs: [changes, build, universal_macos]
+    if: needs.changes.outputs.required == 'true' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.publish == true)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -129,7 +161,8 @@ jobs:
           python3 scripts/publish_release.py "${args[@]}"
 
   universal_macos:
-    needs: build
+    needs: [changes, build]
+    if: needs.changes.outputs.required == 'true'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4

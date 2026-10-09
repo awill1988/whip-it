@@ -16,6 +16,39 @@ import publish_release
 
 
 class TestRelease(unittest.TestCase):
+    def test_draft_verification_uses_release_id(self):
+        version = prepare_release.current_version()
+        installers = [Path("install.sh"), Path("install.ps1")]
+        uploaded = [
+            {"name": p.name, "digest": "sha256:" + hashlib.sha256(p.read_bytes()).hexdigest()}
+            for p in installers
+        ]
+        replies = [
+            {"workflow_runs": [{"status": "completed", "conclusion": "success"}]},
+            [{"ref": f"refs/tags/v{version}"}],
+            [{"tag_name": f"v{version}", "draft": True, "id": 123}],
+            {"assets": uploaded},
+        ]
+
+        def command(*args):
+            if args[:2] == ("git", "rev-parse") or args[-1] == ".sha":
+                return "sha"
+            if "databaseId" in args:
+                return "123"
+            return ""
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict("os.environ", {"GITHUB_REPOSITORY": "owner/repo"}),
+            patch.object(publish_release, "run", side_effect=command) as run,
+            patch.object(publish_release.subprocess, "run"),
+            patch.object(publish_release, "verify_assets"),
+            patch.object(publish_release, "api", side_effect=replies) as api,
+        ):
+            publish_release.publish(Path(directory), bootstrap=True)
+        self.assertEqual(api.call_args.args[0], "repos/owner/repo/releases/123")
+        self.assertIn("--draft=false", run.call_args.args)
+
     def test_semver_order_and_invalid_versions(self):
         versions = ["0.1.0-alpha.2", "0.1.0-alpha.10", "0.1.0-beta", "0.1.0", "0.2.0"]
         self.assertEqual(versions, sorted(versions, key=prepare_release.version_key))
