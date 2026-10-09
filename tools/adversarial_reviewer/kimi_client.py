@@ -1,6 +1,7 @@
 """CI-only Kimi transport; credentials and raw provider responses stay private."""
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -32,6 +33,11 @@ def request(messages):
     key = os.environ.get("KIMI_API_KEY", "").strip()
     if not key:
         raise KimiError("missing KIMI_API_KEY repository secret")
+    scope = (
+        os.environ.get("GITHUB_REPOSITORY", "whip-it")
+        + ":"
+        + (os.environ.get("GITHUB_HEAD_REF") or os.environ.get("GITHUB_REF", "local-review"))
+    )
     body = json.dumps(
         {
             "model": MODEL,
@@ -39,6 +45,7 @@ def request(messages):
             "messages": messages,
             "response_format": {"type": "json_object"},
             "max_tokens": OUTPUT_TOKENS,
+            "prompt_cache_key": "whip-it-review-" + hashlib.sha256(scope.encode()).hexdigest()[:32],
         }
     ).encode()
     opener = urllib.request.build_opener(NoRedirect())
@@ -97,6 +104,13 @@ def request(messages):
             for name in ("prompt_tokens", "completion_tokens", "total_tokens")
             if type(value := usage.get(name)) is int and value >= 0
         }
+        details = usage.get("prompt_tokens_details", {})
+        if not isinstance(details, dict):
+            details = {}
+        for name in ("cached_tokens", "cache_write_tokens"):
+            value = details.get(name, usage.get(name))
+            if type(value) is int and value >= 0:
+                counts[name] = value
         return {"response": result, "usage": counts}
     except (ValueError, KeyError, IndexError, TypeError, AttributeError):
         raise KimiError("kimi returned an invalid structured response") from None

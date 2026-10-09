@@ -1,18 +1,18 @@
 """Exercise setup without fetching releases or changing the user's installation."""
 
 import hashlib
-import io
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
 import unittest
-import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from scripts.package_plugin import package
+from scripts.prepare_release import current_version
 
 
 @unittest.skipIf(os.name == "nt", "posix installer")
@@ -29,11 +29,10 @@ class TestPosixInstaller(unittest.TestCase):
             "PATH": str(self.bin) + os.pathsep + os.environ["PATH"],
             "SHELL": "/bin/zsh",
             "WHIP_IT_INSTALL_DIR": str(self.root / "user's bin"),
-            "WHIP_IT_VERSION": "0.1.0",
-            "WHIP_IT_NO_MODIFY_PATH": "0",
             "INSTALL_FIXTURES": str(self.root),
             "INSTALL_TEST_OS": "Linux",
             "INSTALL_TEST_ARCH": "x86_64",
+            "INSTALL_CLIENT_LOG": str(self.root / "clients.log"),
         }
         Path(self.env["HOME"]).mkdir()
         scripts = {
@@ -49,27 +48,26 @@ class TestPosixInstaller(unittest.TestCase):
                 "shutil.copyfile(source,sys.argv[sys.argv.index('-o')+1])\n"
             ),
         }
+        for client in ("claude", "codex", "agy"):
+            scripts[client] = (
+                "import os,pathlib,sys\n"
+                "with open(os.environ['INSTALL_CLIENT_LOG'], 'a') as f: f.write(repr(sys.argv[1:])+'\\n')\n"
+                "sys.exit(1 if os.environ.get('INSTALL_CLIENT_FAIL') else 0)\n"
+            )
         for name, body in scripts.items():
             path = self.bin / name
             path.write_text(f"#!{sys.executable}\n" + body)
             path.chmod(0o755)
 
     def archive(self, target):
-        path = self.root / f"whip-it-{target}.tar.gz"
-        data = b"#!/bin/sh\nprintf 'whip-it 0.1.0\\n'\n"
-        with tarfile.open(path, "w:gz") as stream:
-            entry = tarfile.TarInfo("whip-it")
-            entry.size = len(data)
-            entry.mode = 0o755
-            stream.addfile(entry, io.BytesIO(data))
-        path.with_name(path.name + ".sha256").write_text(
-            f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n"
-        )
-        return path
+        binary = self.root / "whip-it"
+        binary.write_text(f"#!/bin/sh\nprintf 'whip-it {current_version()}\\n'\n")
+        binary.chmod(0o755)
+        return package(binary, target, self.root)
 
-    def install(self):
+    def install(self, client="agy", *options):
         return subprocess.run(
-            ["sh", str(ROOT / "install.sh")],
+            ["sh", str(ROOT / "install.sh"), "--client", client, *options],
             env=self.env,
             capture_output=True,
             text=True,
@@ -87,22 +85,47 @@ class TestPosixInstaller(unittest.TestCase):
             self.archive(target)
             result = self.install()
             self.assertEqual(result.returncode, 0, result.stderr)
-        profile = Path(self.env["HOME"]) / ".zshrc"
-        self.assertEqual(profile.read_text().count("# whip-it installer"), 1)
-        result = subprocess.run(
-            ["sh", "-c", '. "$1"; command -v whip-it', "sh", str(profile)],
-            env=self.env,
-            capture_output=True,
-            text=True,
-            check=True,
+        for client in ("claude", "codex", "agy"):
+            for _ in range(2):
+                result = self.install(client)
+                self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((Path(self.env["HOME"]) / ".zshrc").exists())
+        log = (self.root / "clients.log").read_text()
+        self.assertIn("marketplace", log)
+        self.assertIn("whip-it@awill1988", log)
+
+    def test_registration_failure_can_retry(self):
+        self.archive("x86_64-unknown-linux-musl")
+        self.env["INSTALL_CLIENT_FAIL"] = "1"
+        self.assertNotEqual(self.install().returncode, 0)
+        del self.env["INSTALL_CLIENT_FAIL"]
+        self.assertEqual(self.install().returncode, 0)
+
+    def test_codex_upgrade_replaces_only_conflicting_marketplace(self):
+        self.archive("x86_64-unknown-linux-musl")
+        client = self.bin / "codex"
+        client.write_text(
+            f"#!{sys.executable}\n"
+            "import os,pathlib,sys\n"
+            "marker=pathlib.Path(os.environ['INSTALL_FIXTURES'])/'removed'\n"
+            "if sys.argv[1:4]==['plugin','marketplace','add'] and not marker.exists():\n"
+            " print(\"Error: marketplace 'awill1988' is already added from a different source\", file=sys.stderr)\n"
+            " sys.exit(1)\n"
+            "if sys.argv[1:]==['plugin','marketplace','remove','awill1988']: marker.touch()\n"
         )
-        self.assertEqual(result.stdout.strip(), self.env["WHIP_IT_INSTALL_DIR"] + "/whip-it")
+        result = self.install("codex")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "removed").exists())
+
+    def test_invalid_version_never_downloads(self):
+        self.assertNotEqual(self.install("agy", "--version", "../bad").returncode, 0)
+        self.assertFalse(Path(self.env["WHIP_IT_INSTALL_DIR"]).exists())
 
     def test_bad_checksum_or_download_preserves_existing_install(self):
         archive = self.archive("x86_64-unknown-linux-musl")
         archive.with_name(archive.name + ".sha256").write_text("0" * 64 + "  bad\n")
         destination = Path(self.env["WHIP_IT_INSTALL_DIR"]) / "whip-it"
-        destination.parent.mkdir()
+        destination.parent.mkdir(parents=True)
         destination.write_text("existing installation")
         for failure in ("", "download failed"):
             self.env["INSTALL_TEST_FAIL"] = failure
@@ -129,26 +152,37 @@ class TestWindowsInstaller(unittest.TestCase):
             self.skipTest("build the native executable before testing the windows installer")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            archive = root / "fixture.zip"
-            with zipfile.ZipFile(archive, "w") as stream:
-                stream.write(executable, "whip-it.exe")
+            archive = package(executable, "x86_64-pc-windows-msvc", root)
             (root / "checksum").write_text(hashlib.sha256(archive.read_bytes()).hexdigest())
             script = root / "test.ps1"
             script.write_text(
                 "param($Installer, $Root)\n"
                 "$ErrorActionPreference='Stop'\n"
                 "function Invoke-WebRequest { param($Uri,$OutFile,$TimeoutSec)\n"
-                "  $source=if ($Uri.EndsWith('.sha256')) {'checksum'} else {'fixture.zip'}\n"
+                "  $source=if ($Uri.EndsWith('.sha256')) {'checksum'} else {'whip-it-plugin-x86_64-pc-windows-msvc.zip'}\n"
                 "  Copy-Item (Join-Path $Root $source) $OutFile\n}\n"
+                "function agy { $global:LASTEXITCODE=0 }\n"
+                "function claude { $global:LASTEXITCODE=0 }\n"
+                "function codex {\n"
+                " if ($args[2] -eq 'add' -and -not $global:removed) {\n"
+                "  $global:LASTEXITCODE=1\n"
+                "  Write-Output \"Error: marketplace 'awill1988' is already added from a different source\"\n"
+                " } else { $global:LASTEXITCODE=0 }\n"
+                " if ($args[2] -eq 'remove') { $global:removed=$true }\n"
+                "}\n"
                 "$dest=Join-Path $Root 'bin with spaces'\n"
-                "& $Installer -InstallDir $dest -NoModifyPath\n"
-                "& $Installer -InstallDir $dest -NoModifyPath\n"
-                "$before=(Get-FileHash (Join-Path $dest 'whip-it.exe')).Hash\n"
+                "& $Installer -InstallDir $dest -Client agy\n"
+                "& $Installer -InstallDir $dest -Client agy\n"
+                "& $Installer -InstallDir $dest -Client claude\n"
+                "& $Installer -InstallDir $dest -Client codex\n"
+                "if (-not $global:removed) { throw 'codex upgrade not registered' }\n"
+                "$binary=(Get-ChildItem $dest -Recurse -Filter whip-it.exe)[0].FullName\n"
+                "$before=(Get-FileHash $binary).Hash\n"
                 "Set-Content (Join-Path $Root 'checksum') ('0' * 64)\n"
                 "$failed=$false\n"
-                "try { & $Installer -InstallDir $dest -NoModifyPath } catch { $failed=$true }\n"
+                "try { & $Installer -InstallDir $dest -Client agy } catch { $failed=$true }\n"
                 "if (-not $failed) { throw 'invalid archive accepted' }\n"
-                "if ((Get-FileHash (Join-Path $dest 'whip-it.exe')).Hash -ne $before) "
+                "if ((Get-FileHash $binary).Hash -ne $before) "
                 "{ throw 'existing installation changed' }\n"
             )
             result = subprocess.run(

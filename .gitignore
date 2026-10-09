@@ -58,3 +58,4 @@ runtime/
 
 # Native build artifacts
 /target/
+/bin/

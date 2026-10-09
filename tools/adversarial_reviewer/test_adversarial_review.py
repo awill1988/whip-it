@@ -8,6 +8,9 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 import unittest
 import subprocess
+import tempfile
+import threading
+import time
 from unittest.mock import patch
 
 from adversarial_review import (
@@ -20,20 +23,70 @@ from adversarial_review import (
     CHUNK_BYTES,
     supporting_diffs,
     SUPPORT_BYTES,
+    CONTEXT_TOKENS,
+    batch_chunks,
 )
 from kimi_client import KimiError
 from best_practices import get_best_practices_context, INVARIANT_RULES
 
 
 class TestAdversarialReviewer(unittest.TestCase):
+    def test_diff_retains_surrounding_workflow_conditions(self):
+        real_run = subprocess.run
+        with tempfile.TemporaryDirectory() as directory:
+
+            def git(*args):
+                return real_run(["git", *args], cwd=directory, check=True, capture_output=True)
+
+            git("init")
+            path = Path(directory) / "ci.yml"
+            path.write_text("if: event == 'push'\n" + "# context\n" * 20 + "run: old\n")
+            git("add", "ci.yml")
+            git(
+                "-c",
+                "user.name=test",
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-m",
+                "fixture",
+            )
+            path.write_text(path.read_text().replace("run: old", "run: new"))
+            with patch(
+                "adversarial_review.subprocess.run",
+                side_effect=lambda *args, **kwargs: real_run(*args, cwd=directory, **kwargs),
+            ):
+                # Compare the committed file with a second commit, as the review does.
+                git("add", "ci.yml")
+                git(
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@example.com",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "-m",
+                    "change",
+                )
+                diff, files = extract_git_diff("HEAD^", "HEAD")
+            self.assertIn(" if: event == 'push'", diff)
+            self.assertIn("+run: new", diff)
+            self.assertEqual(files, ["ci.yml"])
+
     def test_changed_sibling_imports_are_context_only(self):
         target = "diff --git a/tools/test_eval.py b/tools/test_eval.py"
         dependency = "diff --git a/tools/eval.py b/tools/eval.py\n+CASES = ()\n"
         diff = target + "\n+import eval\n" + dependency
-        with patch(
-            "adversarial_review.run_model_reviewer",
-            return_value=("APPROVE", [], "checked branch"),
-        ) as reviewer:
+        with (
+            patch(
+                "adversarial_review.run_model_reviewer",
+                return_value=("APPROVE", [], "checked branch"),
+            ) as reviewer,
+            patch("adversarial_review.batch_chunks", side_effect=lambda chunks: chunks),
+        ):
             report = review_diff(diff, ["tools/test_eval.py", "tools/eval.py"])
         self.assertTrue(report["complete"])
         first = reviewer.call_args_list[0].args
@@ -48,8 +101,24 @@ class TestAdversarialReviewer(unittest.TestCase):
         self.assertEqual(supporting_diffs(header, "+import eval\n", chunks, files), "")
         self.assertEqual(supporting_diffs(header, "+import other\n", chunks, files), "")
 
+    def test_packaging_and_dispatch_references_supply_context(self):
+        for current, related, body in (
+            ("hooks.json", "scripts/package_plugin.py", '+files = ["hooks.json"]\n'),
+            (
+                ".github/workflows/adversarial-review.yml",
+                "scripts/open_release.py",
+                '+run("adversarial-review.yml", "--ref", branch)\n',
+            ),
+        ):
+            header = f"diff --git a/{current} b/{current}"
+            dependency = f"diff --git a/{related} b/{related}\n{body}"
+            support = supporting_diffs(
+                header, "+changed\n", [(dependency.splitlines()[0], dependency)], [current, related]
+            )
+            self.assertIn(body, support)
+
     def test_support_never_displaces_primary_diff_or_exceeds_prompt_budget(self):
-        for support, included in (("supporting definition", True), ("x" * 24576, False)):
+        for support, included in (("supporting definition", True), ("x" * CONTEXT_TOKENS, False)):
             with patch(
                 "adversarial_review.complete",
                 return_value={
@@ -61,9 +130,79 @@ class TestAdversarialReviewer(unittest.TestCase):
                 result = run_model_reviewer("primary diff", [], "", supporting_context=support)
             self.assertEqual(result[0], "APPROVE")
             messages = provider.call_args.args[0]
-            self.assertLessEqual(sum(len(m["content"].encode()) for m in messages), 24576)
+            self.assertLessEqual(sum(len(m["content"].encode()) for m in messages), CONTEXT_TOKENS)
             self.assertIn("primary diff", messages[1]["content"])
             self.assertEqual(support in messages[1]["content"], included)
+
+    def test_parallel_review_is_bounded_and_output_order_is_stable(self):
+        diff = "".join(f"diff --git a/{i} b/{i}\n+{'x' * 700}\n" for i in range(4))
+        barrier = threading.Barrier(3)
+        lock = threading.Lock()
+        active = peak = 0
+        deadlines = []
+
+        def reviewer(chunk, *args, deadline, **kwargs):
+            nonlocal active, peak
+            index = int(chunk.splitlines()[0].split("a/")[1].split()[0])
+            with lock:
+                active += 1
+                peak = max(peak, active)
+                deadlines.append(deadline)
+            if index < 3:
+                barrier.wait(timeout=3)
+                time.sleep((3 - index) * 0.005)
+            with lock:
+                active -= 1
+            return "APPROVE", [], f"checked file {index}"
+
+        with (
+            patch("adversarial_review.CHUNK_BYTES", 1024),
+            patch("adversarial_review.run_model_reviewer", side_effect=reviewer),
+        ):
+            report = review_diff(diff, [str(i) for i in range(4)])
+        self.assertEqual(peak, 3)
+        self.assertEqual(len(set(deadlines)), 1)
+        self.assertTrue(report["complete"])
+        self.assertEqual(
+            [c["summary"] for c in report["chunks"]], [f"checked file {i}" for i in range(4)]
+        )
+
+    def test_incomplete_parallel_batch_stops_new_calls(self):
+        diff = "".join(f"diff --git a/{i} b/{i}\n+{'x' * 700}\n" for i in range(6))
+
+        def reviewer(chunk, *args, **kwargs):
+            if "a/1 " in chunk:
+                return "COMMENT", [], "review incomplete: timeout"
+            return "APPROVE", [], "checked branch"
+
+        with (
+            patch("adversarial_review.CHUNK_BYTES", 1024),
+            patch("adversarial_review.run_model_reviewer", side_effect=reviewer) as runner,
+        ):
+            report = review_diff(diff, [str(i) for i in range(6)])
+        self.assertEqual(runner.call_count, 3)
+        self.assertEqual(report["completed_chunks"], 2)
+        self.assertFalse(report["complete"])
+        self.assertEqual(report["disposition"], "COMMENT")
+
+    def test_batches_preserve_all_diff_lines(self):
+        diff = "diff --git a/a b/a\n+one\ndiff --git a/b b/b\n+two\n"
+        batches = batch_chunks(split_diff(diff))
+        self.assertEqual(len(batches), 1)
+        self.assertEqual("".join(c for _, c in batches), diff)
+
+    def test_system_prefix_is_stable_across_evidence_counts(self):
+        with patch(
+            "adversarial_review.complete",
+            return_value={"rationale": "checked all branches", "findings": [], "abstention": ""},
+        ) as provider:
+            for size in (1, 4):
+                run_model_reviewer(
+                    "diff", [], "", [{"file": "a", "line": i, "evidence": "x"} for i in range(size)]
+                )
+        self.assertEqual(
+            provider.call_args_list[0].args[0][0], provider.call_args_list[1].args[0][0]
+        )
 
     def test_proposed_findings_require_confirmation(self):
         proposed = {
@@ -129,7 +268,7 @@ class TestAdversarialReviewer(unittest.TestCase):
         self.assertEqual(disposition, "APPROVE")
 
     def test_large_diff_preserves_every_line_and_file_header(self):
-        diff = "diff --git a/a.rs b/a.rs\n" + "+token\n" * 7000
+        diff = "diff --git a/a.rs b/a.rs\n" + "+token\n" * 14000
         diff += "diff --git a/README.md b/README.md\n+updated\n"
         chunks = split_diff(diff)
         self.assertGreater(len(chunks), 1)
@@ -148,7 +287,7 @@ class TestAdversarialReviewer(unittest.TestCase):
         self.assertEqual(files, ["a.rs", "README.md"])
 
     def test_approval_requires_every_chunk(self):
-        diff = "diff --git a/a.rs b/a.rs\n" + "+token\n" * 7000
+        diff = "diff --git a/a.rs b/a.rs\n" + "+token\n" * 14000
         with (
             patch.object(Path, "exists", return_value=True),
             patch(

@@ -34,82 +34,69 @@ cap or guarantee that your subscription lasts a week.
 
 ## Installation
 
-### 1. Install the executable
+### 1. Install your plugin
 
-Download the native release for your platform. Setup checks the archive's SHA-256
-before replacing an existing installation; hooks never download anything.
-
-**macOS / Linux**
-
-```sh
-curl -fsSL https://github.com/awill1988/whip-it/releases/download/v0.1.0/install.sh | sh
-```
-
-**Windows (PowerShell)**
-
-```powershell
-irm https://github.com/awill1988/whip-it/releases/download/v0.1.0/install.ps1 | iex
-```
-
-Restart your terminal after setup. No Cargo, Python, or API key is needed.
-The installers use a user-owned binary directory and add it to your user path.
-Review [install.sh](install.sh) or [install.ps1](install.ps1) before running.
-Release downloads require the published `v0.1.0` release; source installation below
-remains available before that release is published.
-
-### 2. Install your plugin
+Have your client installed, then run its command below on macOS or Linux.
+The installer downloads the matching plugin from GitHub Releases, verifies its
+SHA-256 checksum, and registers it with your client. Packages support macOS,
+Linux, and Windows on x64 and ARM64. No Cargo, Python, API key, or setup slash
+command is needed. Installed hooks invoke the executable directly and never download anything.
 
 **Claude Code**
 
 ```sh
-claude plugin marketplace add awill1988/whip-it
-claude plugin install whip-it@awill1988
+curl -fsSL https://github.com/awill1988/whip-it/releases/latest/download/install.sh | sh -s -- --client claude
 ```
 
 **Codex**
 
 ```sh
-codex plugin marketplace add awill1988/whip-it
-codex --enable plugins plugin add whip-it@awill1988
+curl -fsSL https://github.com/awill1988/whip-it/releases/latest/download/install.sh | sh -s -- --client codex
 ```
 
 **Antigravity CLI**
 
 ```sh
-agy plugin install https://github.com/awill1988/whip-it
+curl -fsSL https://github.com/awill1988/whip-it/releases/latest/download/install.sh | sh -s -- --client agy
 ```
 
-These commands install from this repository. They do not imply inclusion in a
-client's official public directory. The executable must be installed first.
+**Windows PowerShell** — replace `agy` with `claude` or `codex` as needed:
 
-### 3. Restart and verify
+```powershell
+& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing https://github.com/awill1988/whip-it/releases/latest/download/install.ps1).Content)) -Client agy
+```
+
+These commands register a local plugin package; they do not imply inclusion in a
+client's official public directory. Source Git checkouts do not contain executables.
+Downloads occur only during setup. Versioned packages stay in your user data
+directory, and failed downloads or checksum checks preserve previous packages.
+
+### 2. Restart and trust
 
 Start a new client session and approve its hook trust prompt where required.
-Check the executable from the same terminal used to launch the client:
+The executable stays inside the plugin; your shell's `PATH` is unchanged.
 
-```sh
-whip-it --version
-whip-it status
-```
+### 3. Verify
 
 With the default delegation quota of zero, ask the client to launch one subagent
 for a harmless task. The launch should be declined with `whip-it` simplification
 guidance, and the agent should continue directly. If it launches, check plugin
-enablement, hook trust, and the client's executable path before relying on it.
-A version check alone does not prove that a client is invoking its hooks.
+enablement and hook trust before relying on it. Installing a plugin alone does
+not prove that the client is invoking its hooks.
 
-### Build from source
+### Optional standalone executable
 
-With Rust 1.89 or newer and your platform's linker installed:
+For a global `whip-it` command or manual hook configuration, build from source
+with Rust 1.89 or newer and your platform's linker installed:
 
 ```sh
 cargo install --git https://github.com/awill1988/whip-it.git --locked --no-default-features
 ```
 
-Cargo installs into `~/.cargo/bin` or `%USERPROFILE%\\.cargo\\bin` by default.
+Cargo installs into `~/.cargo/bin` or `%USERPROFILE%\.cargo\bin` by default.
 For the Python reference implementation, see [Python installation](docs/usage.md#python-installation).
 
-## Hook setup
+## Manual hook setup
 
 When installing manually via Cargo without a marketplace manager, merge the handlers
 from the matching file into your client's hook settings:

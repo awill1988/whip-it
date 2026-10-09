@@ -3,9 +3,13 @@ name: native executables
 on:
   push:
     branches: [main, "feat/**"]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the checked main commit (bootstrap or recovery)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -74,6 +78,7 @@ jobs:
           python benchmarks/run.py --executable "$binary" --samples 100 --observations --output "dist/benchmarks/${{ matrix.target }}.json"
           python examples/run.py --executable "$binary"
           python scripts/package_native.py --binary "$binary" --target "${{ matrix.target }}" --output dist/native
+          python scripts/package_plugin.py --binary "$binary" --target "${{ matrix.target }}" --output dist/native
       - name: verify installer
         shell: bash
         run: |
@@ -82,6 +87,7 @@ jobs:
           test -f "$binary"
           export WHIP_IT_TEST_EXECUTABLE="$binary"
           python -m unittest discover -s tests -p 'test_installers.py'
+          python -m unittest tests.test_plugin_bundle
       - uses: actions/upload-artifact@v4
         with:
           name: benchmark-${{ matrix.target }}
@@ -95,10 +101,15 @@ jobs:
 
   publish:
     needs: [build, universal_macos]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.publish == true)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: publish-release
+      cancel-in-progress: false
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -108,29 +119,15 @@ jobs:
           pattern: whip-it-*
           path: dist/native
           merge-multiple: true
-      - name: verify release identity and assets
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          git merge-base --is-ancestor HEAD origin/main
-          python3 - <<'PY'
-          import hashlib, os, pathlib, tomllib
-          version = tomllib.loads(pathlib.Path('Cargo.toml').read_text())['package']['version']
-          assert os.environ['RELEASE_TAG'] == f'v{version}', 'tag must match package version'
-          checksums = list(pathlib.Path('dist/native').glob('*.sha256'))
-          assert len(checksums) == 7, 'all platform archives must be present'
-          for checksum in checksums:
-              archive = checksum.with_suffix('')
-              assert hashlib.sha256(archive.read_bytes()).hexdigest() == checksum.read_text().split()[0]
-          PY
-      - name: publish release downloads
+      - name: publish checked release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          BOOTSTRAP: ${{ inputs.publish || false }}
         run: |
-          gh release create "$RELEASE_TAG" dist/native/* install.sh install.ps1 \
-            --verify-tag --title "$RELEASE_TAG" \
-            --notes 'Native executables for macOS, Linux, and Windows. Installers download and verify the matching archive during explicit setup. Hook execution remains local. See README for client installation and verification.'
+          args=()
+          if [ "$BOOTSTRAP" = true ]; then args+=(--bootstrap); fi
+          python3 scripts/publish_release.py "${args[@]}"
+
   universal_macos:
     needs: build
     runs-on: macos-15
@@ -143,13 +140,14 @@ jobs:
       - name: combine architectures
         run: |
           mkdir -p target/universal/intel target/universal/arm
-          tar -xzf artifacts/whip-it-x86_64-apple-darwin/*.tar.gz -C target/universal/intel
-          tar -xzf artifacts/whip-it-aarch64-apple-darwin/*.tar.gz -C target/universal/arm
+          tar -xzf artifacts/whip-it-x86_64-apple-darwin/whip-it-x86_64-apple-darwin.tar.gz -C target/universal/intel
+          tar -xzf artifacts/whip-it-aarch64-apple-darwin/whip-it-aarch64-apple-darwin.tar.gz -C target/universal/arm
           lipo -create target/universal/intel/whip-it target/universal/arm/whip-it -output target/universal/whip-it
           codesign --force --sign - target/universal/whip-it
           lipo target/universal/whip-it -verify_arch x86_64
           lipo target/universal/whip-it -verify_arch arm64
           python3 scripts/package_native.py --binary target/universal/whip-it --target universal-apple-darwin --output dist/native
+          python3 scripts/package_plugin.py --binary target/universal/whip-it --target universal-apple-darwin --output dist/native
       - uses: actions/upload-artifact@v4
         with:
           name: whip-it-universal-apple-darwin

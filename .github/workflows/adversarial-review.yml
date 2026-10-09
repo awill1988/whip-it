@@ -2,10 +2,15 @@ name: Adversarial Code Review
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - main
   workflow_dispatch:
     inputs:
+      pr_number:
+        description: Pull request to receive the review
+        required: false
+        type: string
       base_ref:
         description: 'Base ref to compare against'
         required: false
@@ -128,10 +133,11 @@ jobs:
     name: Submit pull request review
     needs: [review_scope, adversarial_review]
     if: >-
-      always() && !cancelled() && github.event_name == 'pull_request' &&
+      always() && !cancelled() &&
       needs.adversarial_review.result != 'skipped' &&
       needs.adversarial_review.outputs.report_artifact != '' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+       (github.event_name == 'workflow_dispatch' && inputs.pr_number != ''))
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -144,17 +150,21 @@ jobs:
       - uses: actions/github-script@v7
         env:
           REVIEW_JOB_RESULT: ${{ needs.adversarial_review.result }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
         with:
           script: |
             const fs = require('fs');
             const path = 'review-result/report.json';
             if (fs.statSync(path).size > 1024 * 1024) throw new Error('review report exceeds 1 MiB');
             const report = JSON.parse(fs.readFileSync(path, 'utf8'));
-            const expected = context.payload.pull_request.head.sha;
+            const expected = context.payload.pull_request?.head.sha || context.sha;
             if (report.commit_id !== expected) throw new Error('review commit mismatch');
-            const params = {...context.repo, pull_number: context.issue.number};
+            const number = Number(process.env.PR_NUMBER);
+            if (!Number.isSafeInteger(number) || number <= 0) throw new Error('invalid pull request number');
+            const params = {...context.repo, pull_number: number};
             const {data: pr} = await github.rest.pulls.get(params);
-            if (pr.head.sha !== expected || pr.state !== 'open' || pr.draft) {
+            if (pr.head.repo.full_name !== `${context.repo.owner}/${context.repo.repo}` ||
+                pr.head.sha !== expected || pr.state !== 'open' || pr.draft) {
               core.notice('review superseded or pull request not ready');
               return;
             }
@@ -180,6 +190,8 @@ jobs:
                        report.chunks.every(c => c.disposition === 'APPROVE')) {
               event = 'APPROVE';
             }
+            // Release pull requests created by this bot require a maintainer review.
+            if (pr.user.login === 'github-actions[bot]') event = 'COMMENT';
             const body = report.body;
             if (typeof body !== 'string' || !body.trim() || body.length > 60000) {
               throw new Error('missing or oversized review body');

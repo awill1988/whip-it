@@ -5,6 +5,12 @@ and Python reference share delegation hook contracts and configuration.
 Native-only commands include `observe` and `classify`; consult
 `whip-it --help` for their arguments.
 
+Plugin installations include the executable and register their hooks without
+changing `PATH`. Bare `whip-it` commands in this guide assume the optional
+standalone installation. Source checkouts contain no compiled executables;
+build with `cargo build --locked --release --no-default-features` and use
+`target/release/whip-it` (`whip-it.exe` on Windows).
+
 ## Configuration
 
 The first readable JSON object in this list supplies configuration over the
@@ -139,12 +145,14 @@ python scripts/verify_native.py --executable target/release/whip-it
 cargo build --locked --release --features diagnostics --target-dir target/diagnostics
 python scripts/verify_native.py --executable target/diagnostics/release/whip-it --diagnostics
 python scripts/verify_observations.py --executable target/diagnostics/release/whip-it
-python scripts/verify_marketplaces.py --executable target/release/whip-it
+python scripts/package_plugin.py --binary target/release/whip-it --target aarch64-apple-darwin
+python scripts/verify_marketplaces.py --repo <extracted-plugin-directory>
 poetry build
 ```
 
-Marketplace verification uses temporary client profiles and tests installed hook
-commands without model calls. It does not establish live conversation dispatch
+Marketplace verification uses temporary client profiles, installs the bundled
+executables, and tests installed hook commands with a broken global `whip-it`
+command on `PATH`. It makes no model calls and does not establish live conversation dispatch
 or hook trust. For profile-routing wrappers, supply the vendor executables with
 `--claude-cli`, `--codex-cli`, and `--agy-cli`; wrappers can override isolation.
 Complete the README's live-session check before relying on a client installation.
@@ -153,6 +161,25 @@ On Windows, use `target/release/whip-it.exe`. The verification scripts isolate
 state and compare the native executable with the Python reference.
 CI also runs builds on macOS, Linux, and Windows for x64 and ARM64, then combines
 the macOS executables into a universal binary.
+
+### Publish a release
+
+Open a version pull request through the release workflow:
+
+```sh
+gh workflow run prepare-release.yml -f version=<new-version>
+```
+
+The workflow synchronizes package versions, plugin manifests, and installer
+defaults, then dispatches the required checks. After merge, native builds and
+Python CI must pass for that commit before publication. Each release contains
+standalone executables and platform plugin archives with SHA-256 sidecars.
+Publication verifies the uploaded asset digests before making the draft public.
+Existing tags cannot move and published assets cannot be overwritten.
+
+For the initial release or recovery of an incomplete draft, dispatch
+`native.yml` on `main` with `publish=true`. This still requires passing checks
+and matching release identity. Binaries remain release assets, outside source Git.
 
 For isolated wheel verification, create a separate virtual environment,
 install the exact `dist/whip_it-<version>-py3-none-any.whl` file with

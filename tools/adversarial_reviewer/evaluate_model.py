@@ -1,9 +1,10 @@
 """Exercise the real reviewer on benign changes and seeded defects."""
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import time
-from adversarial_review import REVIEW_SECONDS, run_model_reviewer
+from adversarial_review import REVIEW_SECONDS, REVIEW_WORKERS, run_model_reviewer
 
 
 CASES = (
@@ -52,7 +53,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.parse_args()
     deadline = time.monotonic() + REVIEW_SECONDS
-    for index, (name, filename, change, expected) in enumerate(CASES, 1):
+
+    def assess(item):
+        index, (name, filename, change, expected) = item
         started = time.monotonic()
         print(f"starting case {index}/{len(CASES)}: {name}", flush=True)
         old_lines = sum(not line.startswith("+") for line in change.splitlines())
@@ -63,25 +66,30 @@ def main():
         )
         actual, findings, summary = run_model_reviewer(diff, [filename], "", deadline=deadline)
         valid = actual == expected and not summary.startswith("review incomplete:")
-        print(
-            json.dumps(
-                {
-                    "case": name,
-                    "passed": valid,
-                    "duration_seconds": round(time.monotonic() - started, 2),
-                    "disposition": actual,
-                    "summary": summary,
-                    "findings": findings,
-                }
-            ),
-            flush=True,
-        )
-        if not valid:
-            message = (
-                f"{name}: {summary}".replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-            )
-            print(f"::error title=kimi reviewer qualification failed::{message}", flush=True)
-            return 1
+        return {
+            "case": name,
+            "passed": valid,
+            "duration_seconds": round(time.monotonic() - started, 2),
+            "disposition": actual,
+            "summary": summary,
+            "findings": findings,
+        }
+
+    with ThreadPoolExecutor(max_workers=REVIEW_WORKERS) as executor:
+        for start in range(0, len(CASES), REVIEW_WORKERS):
+            cases = list(enumerate(CASES[start : start + REVIEW_WORKERS], start + 1))
+            results = list(executor.map(assess, cases))
+            for result in results:
+                print(json.dumps(result), flush=True)
+            failed = next((result for result in results if not result["passed"]), None)
+            if failed:
+                message = (
+                    f"{failed['case']}: {failed['summary']}".replace("%", "%25")
+                    .replace("\r", "%0D")
+                    .replace("\n", "%0A")
+                )
+                print(f"::error title=kimi reviewer qualification failed::{message}", flush=True)
+                return 1
     return 0
 
 

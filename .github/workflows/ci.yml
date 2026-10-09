@@ -5,6 +5,7 @@ on:
     branches: [ main, "feat/**" ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   commit_lint:
@@ -41,6 +42,10 @@ jobs:
           BEFORE_SHA: ${{ github.event.before }}
         run: |
           python3 tools/commit_check/commit_check.py --range "$BEFORE_SHA" HEAD
+
+      - name: Lint manually dispatched branch
+        if: github.event_name == 'workflow_dispatch'
+        run: python3 tools/commit_check/commit_check.py --range origin/main HEAD
 
   test:
     name: Test (Python ${{ matrix.python-version }})

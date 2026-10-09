@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 
 
-def isolated_env(root, executable):
+def isolated_env(root):
     env = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "WINDIR") if k in os.environ}
     dirs = {
         "HOME": "home",
@@ -37,7 +37,10 @@ def isolated_env(root, executable):
         env[key] = str(path)
     bin_dir = root / "bin"
     bin_dir.mkdir()
-    shutil.copy2(executable, bin_dir / ("whip-it.exe" if os.name == "nt" else "whip-it"))
+    # A global installation must never conceal a missing bundled executable.
+    sentinel = bin_dir / ("whip-it.cmd" if os.name == "nt" else "whip-it")
+    sentinel.write_text("@exit /b 99\n" if os.name == "nt" else "#!/bin/sh\nexit 99\n")
+    sentinel.chmod(0o755)
     env.update(
         PATH=str(bin_dir) + os.pathsep + env.get("PATH", ""),
         WHIP_IT_MAX_SUBAGENTS="0",
@@ -74,6 +77,7 @@ def vendor_cli(value):
 
 
 def verify_hooks(path, client, env, cwd):
+    plugin_root = path.parent if client == "antigravity" else path.parents[1]
     data = json.loads(path.read_text())
     events = data["whip-it" if client == "antigravity" else "hooks"]
     required = {"PreToolUse", "PreInvocation" if client == "antigravity" else "UserPromptSubmit"}
@@ -86,8 +90,13 @@ def verify_hooks(path, client, env, cwd):
             if event == "PreToolUse":
                 assert re.search(group.get("matcher", ".*"), tool), (client, tool)
             for handler in group.get("hooks", [group]):
-                command = shlex.split(handler["command"])
-                assert command == ["whip-it", "--client", client, "--event", event], command
+                command = handler["command"]
+                assert shlex.split(command)[1:] == ["--client", client, "--event", event]
+                command = command.replace("${CLAUDE_PLUGIN_ROOT}", str(plugin_root)).replace(
+                    "${PLUGIN_ROOT}", str(plugin_root)
+                )
+                shell = ["cmd", "/d", "/s", "/c"] if os.name == "nt" else ["sh", "-c"]
+                command = [*shell, command]
                 payload = {
                     "session_id": f"fixture-{client}-{event}",
                     "conversationId": f"fixture-{client}-{event}",
@@ -96,7 +105,7 @@ def verify_hooks(path, client, env, cwd):
                     "tool_input": {},
                     "toolCall": {"name": tool, "args": {"Subagents": [{}]}},
                 }
-                output = run(command, env, cwd, json.dumps(payload))
+                output = run(command, env, plugin_root, json.dumps(payload))
                 if event == "PreToolUse":
                     response = json.loads(output)
                     assert (
@@ -112,7 +121,7 @@ def verify_hooks(path, client, env, cwd):
                     allowed = run(
                         command,
                         allowed_env,
-                        cwd,
+                        plugin_root,
                         json.dumps(
                             {**payload, "session_id": "allowed", "conversationId": "allowed"}
                         ),
@@ -122,14 +131,14 @@ def verify_hooks(path, client, env, cwd):
                     assert output == "", output
 
 
-def verify(repo, executable, clients):
+def verify(repo, clients):
     for client, cli in clients.items():
         with tempfile.TemporaryDirectory(prefix=f"whip-it-{client}-") as directory:
             root = Path(directory)
-            env = isolated_env(root, executable)
+            env = isolated_env(root)
             source = root / "source"
             source.mkdir()
-            for name in (".claude-plugin", ".codex-plugin", "hooks"):
+            for name in (".claude-plugin", ".codex-plugin", "hooks", "bin"):
                 shutil.copytree(repo / name, source / name)
             for name in ("plugin.json", "hooks.json"):
                 shutil.copy2(repo / name, source / name)
@@ -152,7 +161,7 @@ def verify(repo, executable, clients):
                 run([cli, "plugin", "marketplace", "add", str(source)], env, root)
                 install = [cli, "--enable", "plugins", "plugin", "add", "whip-it@awill1988"]
                 uninstall = [cli, "--enable", "plugins", "plugin", "remove", "whip-it@awill1988"]
-                hooks_name = "hooks/codex.json"
+                hooks_name = "hooks/codex-plugin.json"
                 search_root = Path(env["CODEX_HOME"]) / "plugins/cache"
             else:
                 run([cli, "plugin", "validate", str(source)], env, root)
@@ -173,7 +182,7 @@ def verify(repo, executable, clients):
                         manifest = json.loads(
                             (path.parents[1] / ".codex-plugin/plugin.json").read_text()
                         )
-                        assert manifest["hooks"] == "./hooks/codex.json"
+                        assert manifest["hooks"] == "./hooks/codex-plugin.json"
                     verify_hooks(path, client, env, root)
                 if client != "codex":
                     selector = "whip-it@awill1988" if client == "claude" else "whip-it"
@@ -192,18 +201,17 @@ def verify(repo, executable, clients):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--executable", type=Path, required=True)
+    parser.add_argument(
+        "--repo", type=Path, required=True, help="extracted platform plugin package"
+    )
     for client in ("claude", "codex", "agy"):
         parser.add_argument(f"--{client}-cli", default=client)
     args = parser.parse_args()
-    if not args.executable.is_file():
-        parser.error("build the release executable or provide its explicit path")
     clients = {
         name: vendor_cli(getattr(args, name + "_cli")) for name in ("claude", "codex", "agy")
     }
     clients["antigravity"] = clients.pop("agy")
-    verify(args.repo.resolve(), args.executable.resolve(), clients)
+    verify(args.repo.resolve(), clients)
 
 
 if __name__ == "__main__":

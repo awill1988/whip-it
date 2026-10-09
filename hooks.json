@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "whip-it --client antigravity --event PreToolUse"
+            "command": "\"./bin/whip-it\" --client antigravity --event PreToolUse"
           }
         ]
       }
@@ -14,7 +14,7 @@
     "PreInvocation": [
       {
         "type": "command",
-        "command": "whip-it --client antigravity --event PreInvocation"
+        "command": "\"./bin/whip-it\" --client antigravity --event PreInvocation"
       }
     ]
   }
