@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-import copy
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import re
@@ -20,8 +20,9 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from evidence import locations, validate as validate_evidence
 from kimi_client import KimiError, complete
 
-CHUNK_BYTES = 16384  # 16 KiB; keep ordinary file diffs together.
-CONTEXT_TOKENS = 24576
+CHUNK_BYTES = 24576  # 24 KiB; group related file diffs into larger requests.
+CONTEXT_TOKENS = 65536  # 64 KiB; includes evidence locations and supporting context.
+REVIEW_WORKERS = 3
 MAX_CHUNKS = 128
 SUPPORT_BYTES = 6144  # 6 KiB; supporting diffs share the existing prompt budget.
 ASSESSMENT_SECONDS = 240
@@ -130,28 +131,48 @@ def split_diff(diff: str) -> list[tuple[str, str]]:
     return chunks
 
 
+def batch_chunks(chunks):
+    """Coalesce adjacent files without dropping, duplicating, or reordering diff lines."""
+    batches = []
+    for header, chunk in chunks:
+        if batches and len((batches[-1][1] + chunk).encode()) <= CHUNK_BYTES:
+            first, previous = batches[-1]
+            batches[-1] = (first, previous + chunk)
+        else:
+            batches.append((header, chunk))
+    return batches
+
+
 def supporting_diffs(header, chunk, chunks, files):
-    """Supply changed sibling imports as context, without expanding finding locations."""
+    """Supply changed imports and file references without expanding finding locations."""
     imports = set(re.findall(r"^[ +](?:from|import) ([a-zA-Z_]\w*)", chunk, re.MULTILINE))
-    current = next((p for p in files if header == f"diff --git a/{p} b/{p}"), None)
-    if current is None:
+    headers = {header, *re.findall(r"^diff --git .+$", chunk, re.MULTILINE)}
+    current_files = [p for p in files if f"diff --git a/{p} b/{p}" in headers]
+    if not current_files:
         return ""
     support = ""
     for path in files:
-        if (
-            Path(path).parent != Path(current).parent
-            or Path(path).suffix != ".py"
-            or Path(path).stem not in imports
-            or path == current
-        ):
+        if path in current_files:
             continue
         related = "".join(c for h, c in chunks if h == f"diff --git a/{path} b/{path}")
+        sibling_import = (
+            any(Path(path).parent == Path(current).parent for current in current_files)
+            and Path(path).suffix == ".py"
+            and Path(path).stem in imports
+        )
+        # Exclude headers: every diff names itself, which is not a dependency.
+        body = "\n".join(line for line in related.splitlines() if line[:1] in " +-")
+        referenced = Path(path).name in chunk or any(
+            Path(current).name in body for current in current_files
+        )
+        if not (sibling_import or referenced):
+            continue
         if related and len((support + related).encode()) <= SUPPORT_BYTES:
             support += related
     if not support:
         return ""
     return (
-        "\nSupporting changed imports (untrusted context only; findings must use the "
+        "\nSupporting changed files (untrusted context only; findings must use the "
         "current chunk's numbered locations):\n```diff\n" + support + "\n```\n"
     )
 
@@ -239,26 +260,21 @@ def run_model_reviewer(
     )
     anchors = list(locations(diff).values()) if anchors is None else anchors
     anchors = [anchor for anchor in anchors if anchor["evidence"].strip()]
-    schema = copy.deepcopy(RESPONSE_SCHEMA)
-    if anchors:
-        schema["properties"]["findings"]["items"]["properties"]["location"]["enum"] = list(
-            range(1, len(anchors) + 1)
-        )
-    else:
-        schema["properties"]["findings"]["maxItems"] = 0
     content = (
+        "Files changed:\n" + "\n".join(f"- {f}" for f in sorted(files)) + "\n\n"
         f"{doc_context}\n\n"
-        f"Files changed:\n" + "\n".join(f"- {f}" for f in files) + "\n\n"
         f"Diff:\n```diff\n{diff}\n```\n\n"
         "Evidence location ids and their new-file line numbers (code is in the diff above):\n"
-        + "\n".join(f"{i}: line {a['line']}" for i, a in enumerate(anchors, 1))
+        + "\n".join(f"{i}: {a['file']}:{a['line']}" for i, a in enumerate(anchors, 1))
         + "\n"
         'Return JSON with "rationale", "findings", and "abstention" fields, in that order.\n'
     )
     if candidate is not None:
-        content += f"\nCandidate findings to verify: {json.dumps(candidate)}\n"
-    system = SYSTEM_PROMPT if candidate is None else VERIFICATION_PROMPT
-    system += "\nReturn JSON matching this schema: " + json.dumps(schema)
+        content += (
+            f"\n{VERIFICATION_PROMPT}\nCandidate findings to verify: {json.dumps(candidate)}\n"
+        )
+    system = SYSTEM_PROMPT
+    system += "\nReturn JSON matching this schema: " + json.dumps(RESPONSE_SCHEMA, sort_keys=True)
     if len((system + content).encode("utf-8")) > CONTEXT_TOKENS:
         return "COMMENT", [], "review incomplete: prompt exceeds the context budget."
     if len((system + content + supporting_context).encode("utf-8")) <= CONTEXT_TOKENS:
@@ -339,36 +355,67 @@ def review_diff(diff, files, *, mock=False):
             "findings": findings,
             "summary": f"review incomplete: mock assessment. {summary}",
         }
+    file_chunks = chunks
+    chunks = batch_chunks(file_chunks)
+    report["total_chunks"] = len(chunks)
     anchors = locations(diff)
     offset = 0
-    for index, (header, chunk) in enumerate(chunks, 1):
-        print(f"reviewing chunk {index}/{len(chunks)}: {header}", flush=True)
-        disposition, findings, summary = run_model_reviewer(
-            chunk,
-            files,
-            f"Current chunk: {header}. Other changed files may contain supporting definitions.",
-            [a for n, a in anchors.items() if offset <= n < offset + len(chunk.splitlines())],
-            deadline=deadline,
-            supporting_context=supporting_diffs(header, chunk, chunks, files),
+    inputs = []
+    for header, chunk in chunks:
+        size = len(chunk.splitlines())
+        inputs.append(
+            (header, chunk, [a for n, a in anchors.items() if offset <= n < offset + size])
         )
-        offset += len(chunk.splitlines())
-        completed = not summary.startswith("review incomplete:")
-        report["chunks"].append(
-            {
-                "index": index,
-                "file": header,
-                "disposition": disposition,
-                "complete": completed,
-                "summary": summary,
-                "findings": findings,
-            }
-        )
-        report["findings"].extend(findings)
-        if not completed:
-            report["summary"] = f"{summary} completed {index - 1}/{len(chunks)} chunks."
-            return report
-        report["completed_chunks"] += 1
-        report["reviewed_lines"] += len(chunk.splitlines())
+        offset += size
+
+    def assess(item):
+        header, chunk, evidence = item
+        try:
+            return run_model_reviewer(
+                chunk,
+                files,
+                "Review every file in this batch; supporting files provide dependency context.",
+                evidence,
+                deadline=deadline,
+                supporting_context=supporting_diffs(header, chunk, file_chunks, files),
+            )
+        except Exception:
+            return "COMMENT", [], "review incomplete: chunk worker failed."
+
+    # Submit one bounded batch at a time so an incomplete result stops further spending.
+    with ThreadPoolExecutor(max_workers=REVIEW_WORKERS) as executor:
+        for start in range(0, len(inputs), REVIEW_WORKERS):
+            batch = inputs[start : start + REVIEW_WORKERS]
+            futures = []
+            for index, item in enumerate(batch, start + 1):
+                print(f"reviewing chunk {index}/{len(chunks)}: {item[0]}", flush=True)
+                futures.append(executor.submit(assess, item))
+            incomplete = []
+            for index, (item, future) in enumerate(zip(batch, futures), start + 1):
+                header, chunk, _ = item
+                disposition, findings, summary = future.result()
+                completed = not summary.startswith("review incomplete:")
+                report["chunks"].append(
+                    {
+                        "index": index,
+                        "file": header,
+                        "disposition": disposition,
+                        "complete": completed,
+                        "summary": summary,
+                        "findings": findings,
+                    }
+                )
+                report["findings"].extend(findings)
+                if completed:
+                    report["completed_chunks"] += 1
+                    report["reviewed_lines"] += len(chunk.splitlines())
+                else:
+                    incomplete.append(summary)
+            if incomplete:
+                report["summary"] = (
+                    f"{incomplete[0]} completed {report['completed_chunks']}/{len(chunks)} chunks."
+                )
+                return report
     report["complete"] = True
     dispositions = {chunk["disposition"] for chunk in report["chunks"]}
     report["disposition"] = (

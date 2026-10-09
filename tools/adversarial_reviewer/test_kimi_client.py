@@ -51,6 +51,27 @@ class TestKimiClient(unittest.TestCase):
         self.assertEqual(result["response"], value)
         self.assertEqual(result["usage"]["total_tokens"], 15)
 
+    def test_cache_key_is_stable_and_usage_is_numeric_only(self):
+        value = response({"rationale": "checked branch", "findings": [], "abstention": ""})
+        value["usage"]["prompt_tokens_details"] = {
+            "cached_tokens": 8,
+            "cache_write_tokens": 2,
+            "secret": "omit",
+        }
+        with patch.dict(
+            os.environ, {"GITHUB_REPOSITORY": "owner/repo", "GITHUB_HEAD_REF": "release/test"}
+        ):
+            result, first = self.invoke(value)
+            _, second = self.invoke(value)
+        first_key = json.loads(first.open.call_args.args[0].data)["prompt_cache_key"]
+        self.assertEqual(
+            first_key, json.loads(second.open.call_args.args[0].data)["prompt_cache_key"]
+        )
+        self.assertNotIn("owner/repo", first_key)
+        self.assertEqual(result["usage"]["cached_tokens"], 8)
+        self.assertEqual(result["usage"]["cache_write_tokens"], 2)
+        self.assertNotIn("secret", result["usage"])
+
     def test_missing_key_makes_no_request(self):
         with (
             patch.dict(os.environ, {}, clear=True),
