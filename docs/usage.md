@@ -5,6 +5,11 @@ and Python reference share delegation hook contracts and configuration.
 Native-only commands include `observe` and `classify`; consult
 `whip-it --help` for their arguments.
 
+Plugin installations include the executable and register their hooks without
+changing `PATH`. Bare `whip-it` commands in this guide assume the optional
+standalone installation. From a source checkout, `sh bin/launch.cmd` on Unix or
+`bin\launch.cmd` in Windows Command Prompt invokes the bundled executable.
+
 ## Configuration
 
 The first readable JSON object in this list supplies configuration over the
@@ -139,12 +144,14 @@ python scripts/verify_native.py --executable target/release/whip-it
 cargo build --locked --release --features diagnostics --target-dir target/diagnostics
 python scripts/verify_native.py --executable target/diagnostics/release/whip-it --diagnostics
 python scripts/verify_observations.py --executable target/diagnostics/release/whip-it
-python scripts/verify_marketplaces.py --executable target/release/whip-it
+python scripts/bundle_plugin.py
+python scripts/verify_marketplaces.py
 poetry build
 ```
 
-Marketplace verification uses temporary client profiles and tests installed hook
-commands without model calls. It does not establish live conversation dispatch
+Marketplace verification uses temporary client profiles, installs the bundled
+executables, and tests installed hook commands with a broken global `whip-it`
+command on `PATH`. It makes no model calls and does not establish live conversation dispatch
 or hook trust. For profile-routing wrappers, supply the vendor executables with
 `--claude-cli`, `--codex-cli`, and `--agy-cli`; wrappers can override isolation.
 Complete the README's live-session check before relying on a client installation.
@@ -153,6 +160,23 @@ On Windows, use `target/release/whip-it.exe`. The verification scripts isolate
 state and compare the native executable with the Python reference.
 CI also runs builds on macOS, Linux, and Windows for x64 and ARM64, then combines
 the macOS executables into a universal binary.
+
+### Refresh bundled executables
+
+`bin/native/manifest.json` records hashes of the native sources and each bundled
+executable. CI rejects a bundle when its sources or executable hashes differ.
+After changing Rust sources, download artifacts from a passing native build of
+those sources and refresh the bundle:
+
+```sh
+gh run download <run-id> --pattern 'whip-it-*' --dir <artifact-directory>
+python scripts/bundle_plugin.py --artifacts <artifact-directory> --source-commit <run-head-commit>
+```
+
+Commit the refreshed `bin/native/` directory with the source changes. The helper
+verifies archive checksums and compares the build's source commit with the local
+Rust sources before importing files. User installation only copies these files;
+hook execution performs no compilation, download, or telemetry export.
 
 For isolated wheel verification, create a separate virtual environment,
 install the exact `dist/whip_it-<version>-py3-none-any.whl` file with
