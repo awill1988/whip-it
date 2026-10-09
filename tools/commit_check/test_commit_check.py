@@ -22,6 +22,17 @@ from commit_check import (
 
 
 class TestCommitCheck(unittest.TestCase):
+    def test_squash_title_passes_without_unwrapped_pr_body(self) -> None:
+        title = "fix: require grounded review findings"
+        body = (
+            "## Changes\n\n"
+            "Require review findings to identify an exact diff location, supporting code, "
+            "violated invariant, failure scenario, and correction."
+        )
+        with self.assertRaisesRegex(ValueError, "line 5 exceeds 72 characters"):
+            validate(f"{title}\n\n{body}")
+        validate(title)
+
     def test_merge_headers_are_skipped_but_child_commits_are_checked(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run = subprocess.run
