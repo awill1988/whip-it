@@ -139,8 +139,15 @@ python scripts/verify_native.py --executable target/release/whip-it
 cargo build --locked --release --features diagnostics --target-dir target/diagnostics
 python scripts/verify_native.py --executable target/diagnostics/release/whip-it --diagnostics
 python scripts/verify_observations.py --executable target/diagnostics/release/whip-it
+python scripts/verify_marketplaces.py --executable target/release/whip-it
 poetry build
 ```
+
+Marketplace verification uses temporary client profiles and tests installed hook
+commands without model calls. It does not establish live conversation dispatch
+or hook trust. For profile-routing wrappers, supply the vendor executables with
+`--claude-cli`, `--codex-cli`, and `--agy-cli`; wrappers can override isolation.
+Complete the README's live-session check before relying on a client installation.
 
 On Windows, use `target/release/whip-it.exe`. The verification scripts isolate
 state and compare the native executable with the Python reference.

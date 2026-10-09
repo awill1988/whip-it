@@ -18,6 +18,7 @@ whip-it = "whipit.cli:main"
 packages = [{ include = "whipit", from = "src" }]
 include = [
     { path = "hooks", format = "sdist" },
+    { path = "plugins", format = "sdist" },
     { path = "scripts", format = "sdist" },
     { path = "tests", format = "sdist" },
     { path = "config", format = "sdist" },

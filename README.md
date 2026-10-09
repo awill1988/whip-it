@@ -34,29 +34,85 @@ cap or guarantee that your subscription lasts a week.
 
 ## Installation
 
-Install directly from GitHub with Cargo and a current stable Rust toolchain (Rust 1.89 or
-newer). Native builds are checked on macOS, Linux, and Windows, on x64 and ARM64.
-Building requires your platform's linker: Xcode Command Line Tools on macOS,
-a C toolchain on Linux, or Visual Studio C++ Build Tools for Windows MSVC.
+### 1. Install the executable
+
+Download the native release for your platform. Setup checks the archive's SHA-256
+before replacing an existing installation; hooks never download anything.
+
+**macOS / Linux**
+
+```sh
+curl -fsSL https://github.com/awill1988/whip-it/releases/download/v0.1.0/install.sh | sh
+```
+
+**Windows (PowerShell)**
+
+```powershell
+irm https://github.com/awill1988/whip-it/releases/download/v0.1.0/install.ps1 | iex
+```
+
+Restart your terminal after setup. No Cargo, Python, or API key is needed.
+The installers use a user-owned binary directory and add it to your user path.
+Review [install.sh](install.sh) or [install.ps1](install.ps1) before running.
+Release downloads require the published `v0.1.0` release; source installation below
+remains available before that release is published.
+
+### 2. Install your plugin
+
+**Claude Code**
+
+```sh
+claude plugin marketplace add awill1988/whip-it
+claude plugin install whip-it@awill1988
+```
+
+**Codex**
+
+```sh
+codex plugin marketplace add awill1988/whip-it
+codex --enable plugins plugin add whip-it@awill1988
+```
+
+**Antigravity CLI**
+
+```sh
+agy plugin install https://github.com/awill1988/whip-it
+```
+
+These commands install from this repository. They do not imply inclusion in a
+client's official public directory. The executable must be installed first.
+
+### 3. Restart and verify
+
+Start a new client session and approve its hook trust prompt where required.
+Check the executable from the same terminal used to launch the client:
+
+```sh
+whip-it --version
+whip-it status
+```
+
+With the default delegation quota of zero, ask the client to launch one subagent
+for a harmless task. The launch should be declined with `whip-it` simplification
+guidance, and the agent should continue directly. If it launches, check plugin
+enablement, hook trust, and the client's executable path before relying on it.
+A version check alone does not prove that a client is invoking its hooks.
+
+### Build from source
+
+With Rust 1.89 or newer and your platform's linker installed:
 
 ```sh
 cargo install --git https://github.com/awill1988/whip-it.git --locked --no-default-features
-whip-it --version
 ```
 
-Cargo installs `whip-it` in `~/.cargo/bin` on macOS/Linux, or
-`%USERPROFILE%\.cargo\bin` on Windows, unless `CARGO_HOME` or an installation
-root overrides it. Make that directory available on the agent client's `PATH`.
-The installed executable does not require Rust or Python to run.
-
-Published release downloads and a self-contained marketplace installation are
-not available yet. For the Python reference implementation, see
-[Python installation](docs/usage.md#python-installation).
+Cargo installs into `~/.cargo/bin` or `%USERPROFILE%\\.cargo\\bin` by default.
+For the Python reference implementation, see [Python installation](docs/usage.md#python-installation).
 
 ## Hook setup
 
-Merge the handlers from the matching file into your client's hook settings.
-Preserve existing handlers; installing the executable alone does not enable hooks.
+When installing manually via Cargo without a marketplace manager, merge the handlers
+from the matching file into your client's hook settings:
 
 | Client | Hook configuration |
 | --- | --- |

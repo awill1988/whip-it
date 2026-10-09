@@ -1,0 +1,5 @@
+{
+  "name": "whip-it",
+  "version": "0.1.0",
+  "description": "whip-it! Agent-planning guardrail and simplification hook for Claude Code, Antigravity CLI, and Codex"
+}
