@@ -190,6 +190,8 @@ jobs:
                        report.chunks.every(c => c.disposition === 'APPROVE')) {
               event = 'APPROVE';
             }
+            // Release pull requests created by this bot require a maintainer review.
+            if (pr.user.login === 'github-actions[bot]') event = 'COMMENT';
             const body = report.body;
             if (typeof body !== 'string' || !body.trim() || body.length > 60000) {
               throw new Error('missing or oversized review body');
