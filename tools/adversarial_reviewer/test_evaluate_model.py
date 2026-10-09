@@ -20,7 +20,7 @@ class TestModelQualification(unittest.TestCase):
             redirect_stdout(io.StringIO()) as output,
         ):
             self.assertEqual(evaluate_model.main(), 1)
-        self.assertEqual(reviewer.call_count, 1)
+        self.assertEqual(reviewer.call_count, evaluate_model.REVIEW_WORKERS)
         self.assertIn("starting case 1/6", output.getvalue())
         self.assertIn('"duration_seconds"', output.getvalue())
 
@@ -30,7 +30,11 @@ class TestModelQualification(unittest.TestCase):
             patch.object(
                 evaluate_model,
                 "run_model_reviewer",
-                side_effect=[(case[3], [], "assessed") for case in evaluate_model.CASES],
+                side_effect=lambda diff, *args, **kwargs: (
+                    next(case[3] for case in evaluate_model.CASES if case[2] in diff),
+                    [],
+                    "assessed",
+                ),
             ) as reviewer,
             redirect_stdout(io.StringIO()),
         ):
