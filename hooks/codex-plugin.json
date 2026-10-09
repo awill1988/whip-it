@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${PLUGIN_ROOT}/bin/launch.cmd\" --client codex --event PreToolUse"
+            "command": "\"${PLUGIN_ROOT}/bin/whip-it\" --client codex --event PreToolUse"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${PLUGIN_ROOT}/bin/launch.cmd\" --client codex --event UserPromptSubmit"
+            "command": "\"${PLUGIN_ROOT}/bin/whip-it\" --client codex --event UserPromptSubmit"
           }
         ]
       }
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${PLUGIN_ROOT}/bin/launch.cmd\" --client codex --event Stop"
+            "command": "\"${PLUGIN_ROOT}/bin/whip-it\" --client codex --event Stop"
           }
         ]
       }

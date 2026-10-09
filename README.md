@@ -36,32 +36,40 @@ cap or guarantee that your subscription lasts a week.
 
 ### 1. Install your plugin
 
-Pick your client and run one command. The plugin includes native executables for
-macOS, Linux, and Windows on x64 and ARM64, and selects the matching executable
-locally. No Cargo, Python, API key, separate executable install, or setup slash
-command is needed. Hooks never download anything.
+Have your client installed, then run its command below on macOS or Linux.
+The installer downloads the matching plugin from GitHub Releases, verifies its
+SHA-256 checksum, and registers it with your client. Packages support macOS,
+Linux, and Windows on x64 and ARM64. No Cargo, Python, API key, or setup slash
+command is needed. Installed hooks invoke the executable directly and never download anything.
 
 **Claude Code**
 
 ```sh
-claude plugin marketplace add awill1988/whip-it && claude plugin install whip-it@awill1988
+curl -fsSL https://github.com/awill1988/whip-it/releases/latest/download/install.sh | sh -s -- --client claude
 ```
 
 **Codex**
 
 ```sh
-codex plugin marketplace add awill1988/whip-it && codex --enable plugins plugin add whip-it@awill1988
+curl -fsSL https://github.com/awill1988/whip-it/releases/latest/download/install.sh | sh -s -- --client codex
 ```
 
 **Antigravity CLI**
 
 ```sh
-agy plugin install https://github.com/awill1988/whip-it
+curl -fsSL https://github.com/awill1988/whip-it/releases/latest/download/install.sh | sh -s -- --client agy
 ```
 
-These commands install from this repository. They do not imply inclusion in a
-client's official public directory. On Windows, run the commands in Command
-Prompt or PowerShell 7+ for `&&` support.
+**Windows PowerShell** — replace `agy` with `claude` or `codex` as needed:
+
+```powershell
+& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing https://github.com/awill1988/whip-it/releases/latest/download/install.ps1).Content)) -Client agy
+```
+
+These commands register a local plugin package; they do not imply inclusion in a
+client's official public directory. Source Git checkouts do not contain executables.
+Downloads occur only during setup. Versioned packages stay in your user data
+directory, and failed downloads or checksum checks preserve previous packages.
 
 ### 2. Restart and trust
 
@@ -175,9 +183,6 @@ requires a separate diagnostic build or the Python reference.
 The full hook process targets **under 15 ms**. This is a target, not a universal
 deadline: see [reproducible benchmarks](benchmarks/README.md) for measured
 percentiles, workload coverage, and platform results.
-The bundled launcher adds shell startup and platform selection. A local macOS
-ARM64 sample of 50 denial calls measured 12.9 ms median and 17.9 ms p95 through
-the launcher, including process startup; the p95 exceeded the target.
 
 ## Development
 

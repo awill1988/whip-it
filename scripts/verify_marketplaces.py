@@ -201,7 +201,9 @@ def verify(repo, clients):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument(
+        "--repo", type=Path, required=True, help="extracted platform plugin package"
+    )
     for client in ("claude", "codex", "agy"):
         parser.add_argument(f"--{client}-cli", default=client)
     args = parser.parse_args()

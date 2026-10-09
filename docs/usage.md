@@ -7,8 +7,9 @@ Native-only commands include `observe` and `classify`; consult
 
 Plugin installations include the executable and register their hooks without
 changing `PATH`. Bare `whip-it` commands in this guide assume the optional
-standalone installation. From a source checkout, `sh bin/launch.cmd` on Unix or
-`bin\launch.cmd` in Windows Command Prompt invokes the bundled executable.
+standalone installation. Source checkouts contain no compiled executables;
+build with `cargo build --locked --release --no-default-features` and use
+`target/release/whip-it` (`whip-it.exe` on Windows).
 
 ## Configuration
 
@@ -144,8 +145,8 @@ python scripts/verify_native.py --executable target/release/whip-it
 cargo build --locked --release --features diagnostics --target-dir target/diagnostics
 python scripts/verify_native.py --executable target/diagnostics/release/whip-it --diagnostics
 python scripts/verify_observations.py --executable target/diagnostics/release/whip-it
-python scripts/bundle_plugin.py
-python scripts/verify_marketplaces.py
+python scripts/package_plugin.py --binary target/release/whip-it --target aarch64-apple-darwin
+python scripts/verify_marketplaces.py --repo <extracted-plugin-directory>
 poetry build
 ```
 
@@ -161,22 +162,24 @@ state and compare the native executable with the Python reference.
 CI also runs builds on macOS, Linux, and Windows for x64 and ARM64, then combines
 the macOS executables into a universal binary.
 
-### Refresh bundled executables
+### Publish a release
 
-`bin/native/manifest.json` records hashes of the native sources and each bundled
-executable. CI rejects a bundle when its sources or executable hashes differ.
-After changing Rust sources, download artifacts from a passing native build of
-those sources and refresh the bundle:
+Open a version pull request through the release workflow:
 
 ```sh
-gh run download <run-id> --pattern 'whip-it-*' --dir <artifact-directory>
-python scripts/bundle_plugin.py --artifacts <artifact-directory> --source-commit <run-head-commit>
+gh workflow run prepare-release.yml -f version=<new-version>
 ```
 
-Commit the refreshed `bin/native/` directory with the source changes. The helper
-verifies archive checksums and compares the build's source commit with the local
-Rust sources before importing files. User installation only copies these files;
-hook execution performs no compilation, download, or telemetry export.
+The workflow synchronizes package versions, plugin manifests, and installer
+defaults, then dispatches the required checks. After merge, native builds and
+Python CI must pass for that commit before publication. Each release contains
+standalone executables and platform plugin archives with SHA-256 sidecars.
+Publication verifies the uploaded asset digests before making the draft public.
+Existing tags cannot move and published assets cannot be overwritten.
+
+For the initial release or recovery of an incomplete draft, dispatch
+`native.yml` on `main` with `publish=true`. This still requires passing checks
+and matching release identity. Binaries remain release assets, outside source Git.
 
 For isolated wheel verification, create a separate virtual environment,
 install the exact `dist/whip_it-<version>-py3-none-any.whl` file with
