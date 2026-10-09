@@ -85,6 +85,29 @@ class TestKimiClient(unittest.TestCase):
         self.assertEqual(opener.open.call_count, 2)
         self.assertEqual(result["response"], {})
 
+    def test_quota_exhaustion_does_not_retry_or_expose_message(self):
+        error_body = json.dumps(
+            {
+                "error": {
+                    "type": "exceeded_current_quota_error",
+                    "message": "private account information",
+                }
+            }
+        ).encode()
+        opener = MagicMock()
+        opener.open.side_effect = urllib.error.HTTPError(
+            kimi.ENDPOINT, 429, "", {}, io.BytesIO(error_body)
+        )
+        with (
+            patch.dict(os.environ, {"KIMI_API_KEY": "test-key"}),
+            patch.object(kimi.urllib.request, "build_opener", return_value=opener),
+            self.assertRaisesRegex(
+                kimi.KimiError, "^kimi HTTP 429: account balance or quota exhausted$"
+            ),
+        ):
+            kimi.request([])
+        self.assertEqual(opener.open.call_count, 1)
+
     def test_incomplete_or_malformed_responses_fail(self):
         for payload in (response({}, "length"), response({}, "tool_calls"), {}, [], response()):
             with self.subTest(payload=payload):

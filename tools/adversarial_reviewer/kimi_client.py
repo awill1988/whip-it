@@ -52,11 +52,32 @@ def request(messages):
             break
         except urllib.error.HTTPError as error:
             status = error.code
+            error_type = ""
+            try:
+                detail = json.loads(error.read(MAX_RESPONSE_BYTES))
+                value = detail.get("error", {}).get("type")
+                if value in (
+                    "engine_overloaded_error",
+                    "rate_limit_reached_error",
+                    "exceeded_current_quota_error",
+                ):
+                    error_type = value
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
+            retry_after = error.headers.get("Retry-After", "")
             error.close()
+            if error_type == "exceeded_current_quota_error":
+                raise KimiError(f"kimi HTTP {status}: account balance or quota exhausted") from None
             if attempt == 0 and (status == 429 or 500 <= status <= 599):
-                time.sleep(1)
+                delay = int(retry_after) if retry_after.isdigit() else 10
+                if delay > 60:
+                    raise KimiError(
+                        f"kimi HTTP {status}: retry delay exceeds call budget"
+                    ) from None
+                time.sleep(max(1, delay))
                 continue
-            raise KimiError(f"kimi HTTP {status}") from None
+            suffix = f": {error_type}" if error_type else ""
+            raise KimiError(f"kimi HTTP {status}{suffix}") from None
         except (OSError, urllib.error.URLError):
             raise KimiError("kimi connection failed or timed out") from None
     if len(data) > MAX_RESPONSE_BYTES:
