@@ -1,0 +1,6 @@
+{
+  "name": "whip-it",
+  "version": "0.1.0",
+  "description": "Local delegation limits and constructive redirection for Codex.",
+  "hooks": "./hooks/codex.json"
+}

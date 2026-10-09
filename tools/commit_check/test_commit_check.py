@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import os
 import subprocess
 import tempfile
 import unittest
@@ -36,6 +37,9 @@ class TestCommitCheck(unittest.TestCase):
     def test_merge_headers_are_skipped_but_child_commits_are_checked(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run = subprocess.run
+            git_env = {
+                key: value for key, value in os.environ.items() if not key.startswith("GIT_")
+            }
 
             def git(*args, input=None):
                 return run(
@@ -44,6 +48,7 @@ class TestCommitCheck(unittest.TestCase):
                     text=True,
                     capture_output=True,
                     check=True,
+                    env=git_env,
                 ).stdout.strip()
 
             git("init", "--quiet")
@@ -66,7 +71,7 @@ class TestCommitCheck(unittest.TestCase):
                 )
                 with patch(
                     "commit_check.subprocess.run",
-                    side_effect=lambda *a, **kw: run(*a, cwd=directory, **kw),
+                    side_effect=lambda *a, **kw: run(*a, cwd=directory, env=git_env, **kw),
                 ):
                     if valid:
                         check_range(base, merge)
