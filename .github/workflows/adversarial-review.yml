@@ -113,13 +113,20 @@ jobs:
 
       - name: Restore Model & Runner Cache
         id: cache-model
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/adversarial-reviewer
           key: adv-model-v1-${{ hashFiles('tools/adversarial_reviewer/model.env') }}
 
       - name: Ensure Model & Runner
         run: python3 tools/adversarial_reviewer/fetch_model.py
+
+      - name: Cache verified reviewer artifacts
+        if: steps.cache-model.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/adversarial-reviewer
+          key: ${{ steps.cache-model.outputs.cache-primary-key }}
 
       - name: Check reviewer on known changes
         run: |

@@ -11,23 +11,41 @@ from fetch_model import load_env
 CASES = (
     (
         "equivalent arithmetic",
-        "def double(n):\n-    return n * 2\n+    return n + n\n",
+        "example.py",
+        " def double(n):\n-    return n * 2\n+    return n + n\n",
         "APPROVE",
     ),
     (
         "zero denominator",
-        "def fraction(n):\n-    return n / 2\n+    return n / 0\n",
+        "example.py",
+        " def fraction(n):\n-    return n / 2\n+    return n / 0\n",
         "REQUEST_CHANGES",
     ),
     (
         "quota boundary preserved",
-        "def admit(spent, requested, limit):\n-    return spent + requested <= limit\n+    return requested + spent <= limit\n",
+        "example.py",
+        " def admit(spent, requested, limit):\n-    return spent + requested <= limit\n+    return requested + spent <= limit\n",
         "APPROVE",
     ),
     (
         "quota comparison inverted",
-        "def admit(spent, requested, limit):\n-    return spent + requested <= limit\n+    return spent + requested >= limit\n",
+        "example.py",
+        " def admit(spent, requested, limit):\n-    return spent + requested <= limit\n+    return spent + requested >= limit\n",
         "REQUEST_CHANGES",
+    ),
+    (
+        "added verification step",
+        ".github/workflows/check.yml",
+        " steps:\n+  - name: Check integer arithmetic\n+    run: python3 -c 'assert 1 + 1 == 2'\n",
+        "APPROVE",
+    ),
+    (
+        "reviewer docstring simplified",
+        "tools/adversarial_reviewer/review.py",
+        '-"""Enforce zero dependencies and sub-15ms hook latency."""\n'
+        '+"""Review changes; incomplete assessments cannot approve."""\n'
+        " import json\n",
+        "APPROVE",
     ),
 )
 
@@ -40,12 +58,14 @@ def main():
     config = load_env(Path(__file__).with_name("model.env"))
     model = args.cache_dir / config["MODEL_NAME"]
     passed = True
-    for name, change, expected in CASES:
+    for name, filename, change, expected in CASES:
+        old_lines = sum(not line.startswith("+") for line in change.splitlines())
+        new_lines = sum(not line.startswith("-") for line in change.splitlines())
         diff = (
-            "diff --git a/example.py b/example.py\n--- a/example.py\n+++ b/example.py\n"
-            "@@ -1,2 +1,2 @@\n " + change
+            f"diff --git a/{filename} b/{filename}\n--- a/{filename}\n+++ b/{filename}\n"
+            f"@@ -1,{old_lines} +1,{new_lines} @@\n" + change
         )
-        actual, findings, summary = run_model_reviewer(diff, ["example.py"], "", args.runner, model)
+        actual, findings, summary = run_model_reviewer(diff, [filename], "", args.runner, model)
         valid = actual == expected and not summary.startswith("review incomplete:")
         passed &= valid
         print(

@@ -1,6 +1,7 @@
 """Unit tests for whip-it adversarial code reviewer."""
 
 import sys
+import json
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -23,6 +24,50 @@ from best_practices import get_best_practices_context, INVARIANT_RULES
 
 
 class TestAdversarialReviewer(unittest.TestCase):
+    def test_proposed_findings_require_confirmation(self):
+        proposed = {
+            "assessed": True,
+            "rationale": "the new division raises an exception",
+            "findings": [
+                {
+                    "location": 1,
+                    "invariant": "division must be defined",
+                    "scenario": "calling fraction raises ZeroDivisionError",
+                    "correction": "use a nonzero denominator",
+                }
+            ],
+        }
+        cleared = {
+            "assessed": True,
+            "rationale": "the proposed defect is disproven",
+            "findings": [],
+        }
+        for confirmation, expected in (
+            (proposed, "REQUEST_CHANGES"),
+            (cleared, "APPROVE"),
+            ({**cleared, "assessed": False}, "COMMENT"),
+        ):
+            with (
+                self.subTest(expected=expected),
+                patch(
+                    "adversarial_review.subprocess.run",
+                    side_effect=[
+                        subprocess.CompletedProcess([], 0, json.dumps(value), "")
+                        for value in (proposed, confirmation)
+                    ],
+                ) as runner,
+            ):
+                result = run_model_reviewer(
+                    "diff",
+                    [],
+                    "",
+                    Path("runner"),
+                    Path("model"),
+                    [{"file": "a.py", "line": 2, "evidence": "return n / 0"}],
+                )
+                self.assertEqual(result[0], expected)
+                self.assertEqual(runner.call_count, 2)
+
     def test_runner_failures_cannot_approve(self):
         for status, output in (
             (1, "DISPOSITION: APPROVE"),
