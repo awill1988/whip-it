@@ -268,7 +268,7 @@ class TestAdversarialReviewer(unittest.TestCase):
         self.assertEqual(disposition, "APPROVE")
 
     def test_large_diff_preserves_every_line_and_file_header(self):
-        diff = "diff --git a/a.rs b/a.rs\n" + "+token\n" * 7000
+        diff = "diff --git a/a.rs b/a.rs\n" + "+token\n" * 14000
         diff += "diff --git a/README.md b/README.md\n+updated\n"
         chunks = split_diff(diff)
         self.assertGreater(len(chunks), 1)
@@ -287,7 +287,7 @@ class TestAdversarialReviewer(unittest.TestCase):
         self.assertEqual(files, ["a.rs", "README.md"])
 
     def test_approval_requires_every_chunk(self):
-        diff = "diff --git a/a.rs b/a.rs\n" + "+token\n" * 7000
+        diff = "diff --git a/a.rs b/a.rs\n" + "+token\n" * 14000
         with (
             patch.object(Path, "exists", return_value=True),
             patch(

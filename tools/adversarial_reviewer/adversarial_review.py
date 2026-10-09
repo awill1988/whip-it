@@ -20,11 +20,11 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from evidence import locations, validate as validate_evidence
 from kimi_client import KimiError, complete
 
-CHUNK_BYTES = 24576  # 24 KiB; group related file diffs into larger requests.
-CONTEXT_TOKENS = 65536  # 64 KiB; includes evidence locations and supporting context.
+CHUNK_BYTES = 49152  # 48 KiB; group related file diffs into larger requests.
+CONTEXT_TOKENS = 131072  # 128 KiB; includes evidence locations and supporting context.
 REVIEW_WORKERS = 3
 MAX_CHUNKS = 128
-SUPPORT_BYTES = 6144  # 6 KiB; supporting diffs share the existing prompt budget.
+SUPPORT_BYTES = 32768  # 32 KiB; include complete referenced release helpers.
 ASSESSMENT_SECONDS = 240
 REVIEW_SECONDS = 900
 RESPONSE_SCHEMA = {
