@@ -15,7 +15,7 @@ class TestEvidence(unittest.TestCase):
             ).values()
         )
         self.report = {
-            "assessed": True,
+            "abstention": "",
             "rationale": "the default input divides by zero.",
             "findings": [
                 {
@@ -32,7 +32,7 @@ class TestEvidence(unittest.TestCase):
         self.assertEqual(
             validate(
                 {
-                    "assessed": True,
+                    "abstention": "",
                     "rationale": "no defect identified in this change",
                     "findings": [],
                 },
@@ -68,7 +68,7 @@ class TestEvidence(unittest.TestCase):
                 },
                 self.anchors,
             )
-        report = dict(self.report, assessed=False, findings=[])
+        report = dict(self.report, abstention="missing required context", findings=[])
         with self.assertRaises(ValueError):
             validate(report, self.anchors)
 

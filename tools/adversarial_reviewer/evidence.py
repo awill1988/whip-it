@@ -28,11 +28,13 @@ def repetitive(text):
 
 
 def validate(response, anchors):
-    if not isinstance(response, dict) or set(response) != {"assessed", "rationale", "findings"}:
+    if not isinstance(response, dict) or set(response) != {"abstention", "rationale", "findings"}:
         raise ValueError("invalid response fields")
-    assessed, rationale, findings = (response[k] for k in ("assessed", "rationale", "findings"))
-    if type(assessed) is not bool or not assessed:
-        raise ValueError("model could not assess the change")
+    abstention, rationale, findings = (response[k] for k in ("abstention", "rationale", "findings"))
+    if not isinstance(abstention, str) or len(abstention) > 600:
+        raise ValueError("invalid abstention reason")
+    if abstention.strip():
+        raise ValueError(f"model abstained: {abstention.strip()}")
     if (
         not isinstance(rationale, str)
         or not 10 <= len(rationale.strip()) <= 1200

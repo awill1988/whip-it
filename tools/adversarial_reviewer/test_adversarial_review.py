@@ -26,7 +26,7 @@ from best_practices import get_best_practices_context, INVARIANT_RULES
 class TestAdversarialReviewer(unittest.TestCase):
     def test_proposed_findings_require_confirmation(self):
         proposed = {
-            "assessed": True,
+            "abstention": "",
             "rationale": "the new division raises an exception",
             "findings": [
                 {
@@ -38,14 +38,14 @@ class TestAdversarialReviewer(unittest.TestCase):
             ],
         }
         cleared = {
-            "assessed": True,
+            "abstention": "",
             "rationale": "the proposed defect is disproven",
             "findings": [],
         }
         for confirmation, expected in (
             (proposed, "REQUEST_CHANGES"),
             (cleared, "APPROVE"),
-            ({**cleared, "assessed": False}, "COMMENT"),
+            ({**cleared, "abstention": "missing required context"}, "COMMENT"),
         ):
             with (
                 self.subTest(expected=expected),
@@ -99,7 +99,7 @@ class TestAdversarialReviewer(unittest.TestCase):
             return_value=subprocess.CompletedProcess(
                 [],
                 0,
-                '{"assessed":true,"rationale":"the changed branch preserves the existing limit check.","findings":[]} [end of text]',
+                '{"abstention":"","rationale":"the changed branch preserves the existing limit check.","findings":[]} [end of text]',
                 "",
             ),
         ):
@@ -125,7 +125,7 @@ class TestAdversarialReviewer(unittest.TestCase):
             return_value=subprocess.CompletedProcess(
                 [],
                 0,
-                '{"assessed":true,"rationale":"no defect in the changed expression","findings":[]}',
+                '{"abstention":"","rationale":"no defect in the changed expression","findings":[]}',
                 "",
             ),
         ) as runner:
