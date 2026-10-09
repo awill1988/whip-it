@@ -40,7 +40,7 @@ try {
         if ((Get-Item $destination).Attributes -band [IO.FileAttributes]::ReparsePoint) {
             throw 'refusing to replace a managed symlink'
         }
-        [IO.File]::Replace($staged, $destination, $null)
+        [IO.File]::Replace($staged, $destination, (Join-Path $workDir 'previous.exe'))
     } else { [IO.File]::Move($staged, $destination) }
     if (-not $NoModifyPath) {
         $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')

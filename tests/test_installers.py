@@ -124,6 +124,8 @@ class TestWindowsInstaller(unittest.TestCase):
             os.environ.get("WHIP_IT_TEST_EXECUTABLE", ROOT / "target/release/whip-it.exe")
         )
         if not executable.is_file():
+            if "WHIP_IT_TEST_EXECUTABLE" in os.environ:
+                self.fail(f"configured native executable does not exist: {executable}")
             self.skipTest("build the native executable before testing the windows installer")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -156,3 +158,4 @@ class TestWindowsInstaller(unittest.TestCase):
                 timeout=30,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(list((root / "bin with spaces").glob(".whip-it-install-*")), [])

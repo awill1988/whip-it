@@ -76,9 +76,12 @@ jobs:
           python scripts/package_native.py --binary "$binary" --target "${{ matrix.target }}" --output dist/native
       - name: verify installer
         shell: bash
-        env:
-          WHIP_IT_TEST_EXECUTABLE: target/${{ matrix.target }}/release/whip-it.exe
-        run: python -m unittest discover -s tests -p 'test_installers.py'
+        run: |
+          binary="target/${{ matrix.target }}/release/whip-it"
+          if [ "$RUNNER_OS" = Windows ]; then binary="$binary.exe"; fi
+          test -f "$binary"
+          export WHIP_IT_TEST_EXECUTABLE="$binary"
+          python -m unittest discover -s tests -p 'test_installers.py'
       - uses: actions/upload-artifact@v4
         with:
           name: benchmark-${{ matrix.target }}
