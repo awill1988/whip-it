@@ -99,6 +99,7 @@ jobs:
           poetry build
           poetry run ruff check .
           poetry run ruff format --check .
+          python scripts/bundle_plugin.py
 
       - name: Validate JSON syntax
         run: |

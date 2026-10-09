@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "whip-it --client claude --event PreToolUse"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/launch.cmd\" --client claude --event PreToolUse"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "whip-it --client claude --event UserPromptSubmit"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/launch.cmd\" --client claude --event UserPromptSubmit"
           }
         ]
       }

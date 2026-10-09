@@ -82,6 +82,7 @@ jobs:
           test -f "$binary"
           export WHIP_IT_TEST_EXECUTABLE="$binary"
           python -m unittest discover -s tests -p 'test_installers.py'
+          python -m unittest tests.test_plugin_bundle
       - uses: actions/upload-artifact@v4
         with:
           name: benchmark-${{ matrix.target }}
