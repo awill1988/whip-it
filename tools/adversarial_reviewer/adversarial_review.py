@@ -94,7 +94,16 @@ def extract_git_diff(base: str = "origin/main", head: str = "HEAD") -> Tuple[str
         check=True,
     ).stdout
     diff = subprocess.run(
-        ["git", "diff", "--no-ext-diff", "--no-textconv", "--no-color", f"{base}...{head}", "--"],
+        [
+            "git",
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--unified=40",
+            f"{base}...{head}",
+            "--",
+        ],
         capture_output=True,
         text=True,
         check=True,

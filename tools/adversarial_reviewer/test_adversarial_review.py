@@ -8,6 +8,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 import unittest
 import subprocess
+import tempfile
 from unittest.mock import patch
 
 from adversarial_review import (
@@ -26,6 +27,51 @@ from best_practices import get_best_practices_context, INVARIANT_RULES
 
 
 class TestAdversarialReviewer(unittest.TestCase):
+    def test_diff_retains_surrounding_workflow_conditions(self):
+        real_run = subprocess.run
+        with tempfile.TemporaryDirectory() as directory:
+
+            def git(*args):
+                return real_run(["git", *args], cwd=directory, check=True, capture_output=True)
+
+            git("init")
+            path = Path(directory) / "ci.yml"
+            path.write_text("if: event == 'push'\n" + "# context\n" * 20 + "run: old\n")
+            git("add", "ci.yml")
+            git(
+                "-c",
+                "user.name=test",
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-m",
+                "fixture",
+            )
+            path.write_text(path.read_text().replace("run: old", "run: new"))
+            with patch(
+                "adversarial_review.subprocess.run",
+                side_effect=lambda *args, **kwargs: real_run(*args, cwd=directory, **kwargs),
+            ):
+                # Compare the committed file with a second commit, as the review does.
+                git("add", "ci.yml")
+                git(
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@example.com",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "-m",
+                    "change",
+                )
+                diff, files = extract_git_diff("HEAD^", "HEAD")
+            self.assertIn(" if: event == 'push'", diff)
+            self.assertIn("+run: new", diff)
+            self.assertEqual(files, ["ci.yml"])
+
     def test_changed_sibling_imports_are_context_only(self):
         target = "diff --git a/tools/test_eval.py b/tools/test_eval.py"
         dependency = "diff --git a/tools/eval.py b/tools/eval.py\n+CASES = ()\n"
