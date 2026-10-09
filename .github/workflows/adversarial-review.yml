@@ -99,7 +99,7 @@ jobs:
       needs.review_policy.outputs.skip_review != 'true' &&
       (github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 from adversarial_review import DEFAULT_CACHE_DIR, run_model_reviewer
@@ -57,22 +58,26 @@ def main():
     args = parser.parse_args()
     config = load_env(Path(__file__).with_name("model.env"))
     model = args.cache_dir / config["MODEL_NAME"]
-    passed = True
-    for name, filename, change, expected in CASES:
+    deadline = time.monotonic() + 1200
+    for index, (name, filename, change, expected) in enumerate(CASES, 1):
+        started = time.monotonic()
+        print(f"starting case {index}/{len(CASES)}: {name}", flush=True)
         old_lines = sum(not line.startswith("+") for line in change.splitlines())
         new_lines = sum(not line.startswith("-") for line in change.splitlines())
         diff = (
             f"diff --git a/{filename} b/{filename}\n--- a/{filename}\n+++ b/{filename}\n"
             f"@@ -1,{old_lines} +1,{new_lines} @@\n" + change
         )
-        actual, findings, summary = run_model_reviewer(diff, [filename], "", args.runner, model)
+        actual, findings, summary = run_model_reviewer(
+            diff, [filename], "", args.runner, model, deadline=deadline
+        )
         valid = actual == expected and not summary.startswith("review incomplete:")
-        passed &= valid
         print(
             json.dumps(
                 {
                     "case": name,
                     "passed": valid,
+                    "duration_seconds": round(time.monotonic() - started, 2),
                     "disposition": actual,
                     "summary": summary,
                     "findings": findings,
@@ -80,7 +85,9 @@ def main():
             ),
             flush=True,
         )
-    return 0 if passed else 1
+        if not valid:
+            return 1
+    return 0
 
 
 if __name__ == "__main__":

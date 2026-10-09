@@ -2,6 +2,8 @@
 
 import sys
 import json
+import io
+from contextlib import redirect_stderr
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -19,11 +21,34 @@ from adversarial_review import (
     review_diff,
     split_diff,
     CHUNK_BYTES,
+    CONTEXT_TOKENS,
+    OUTPUT_TOKENS,
+    run_inference,
 )
 from best_practices import get_best_practices_context, INVARIANT_RULES
 
 
 class TestAdversarialReviewer(unittest.TestCase):
+    def test_expired_budget_does_not_launch_model(self):
+        with patch("adversarial_review.subprocess.run") as runner:
+            disposition, _, summary = run_model_reviewer(
+                "diff", [], "", Path("runner"), Path("model"), deadline=0
+            )
+        runner.assert_not_called()
+        self.assertEqual(disposition, "COMMENT")
+        self.assertIn("deadline exhausted", summary)
+
+    def test_stalled_process_reports_progress_and_is_reaped(self):
+        output = io.StringIO()
+        with (
+            redirect_stderr(output),
+            patch("adversarial_review.PROGRESS_SECONDS", 0.01),
+            self.assertRaises(subprocess.TimeoutExpired),
+        ):
+            run_inference([sys.executable, "-c", "import time; time.sleep(60)"], 0.2)
+        self.assertIn("model running:", output.getvalue())
+        self.assertIn("model call finished", output.getvalue())
+
     def test_proposed_findings_require_confirmation(self):
         proposed = {
             "abstention": "",
@@ -56,6 +81,7 @@ class TestAdversarialReviewer(unittest.TestCase):
                         for value in (proposed, confirmation)
                     ],
                 ) as runner,
+                patch("adversarial_review.time.monotonic", return_value=100),
             ):
                 result = run_model_reviewer(
                     "diff",
@@ -64,9 +90,11 @@ class TestAdversarialReviewer(unittest.TestCase):
                     Path("runner"),
                     Path("model"),
                     [{"file": "a.py", "line": 2, "evidence": "return n / 0"}],
+                    deadline=125,
                 )
                 self.assertEqual(result[0], expected)
                 self.assertEqual(runner.call_count, 2)
+                self.assertEqual([c.kwargs["timeout"] for c in runner.call_args_list], [25, 25])
 
     def test_runner_failures_cannot_approve(self):
         for status, output in (
@@ -136,6 +164,10 @@ class TestAdversarialReviewer(unittest.TestCase):
         self.assertTrue(prompt.endswith("<|im_start|>assistant\n"))
         self.assertEqual(prompt.count("<|im_start|>system"), 1)
         self.assertIn("--no-conversation", command)
+        self.assertIn("--no-warmup", command)
+        context = int(command[command.index("-c") + 1])
+        self.assertLess(context, CONTEXT_TOKENS)
+        self.assertGreaterEqual(context, len(prompt.encode()) + OUTPUT_TOKENS + 256)
         self.assertEqual(command[command.index("--temp") + 1], "0")
 
     def test_large_diff_preserves_every_line_and_file_header(self):

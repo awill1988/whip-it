@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import threading
 import time
 from typing import Dict, List, Tuple
 
@@ -28,6 +29,9 @@ CHUNK_BYTES = 16384  # 16 KiB; keep ordinary file diffs together.
 CONTEXT_TOKENS = 24576
 OUTPUT_TOKENS = 1024
 MAX_CHUNKS = 128
+ASSESSMENT_SECONDS = 600
+REVIEW_SECONDS = 1800
+PROGRESS_SECONDS = 30
 RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -189,6 +193,40 @@ def run_heuristic_reviewer(diff: str, files: List[str]) -> Tuple[str, List[Dict]
     return disposition, findings, summary
 
 
+def run_inference(command, timeout):
+    """Keep progress visible without exposing prompts or partial model output."""
+    started = time.monotonic()
+    finished = threading.Event()
+
+    def progress():
+        while not finished.wait(PROGRESS_SECONDS):
+            elapsed = time.monotonic() - started
+            print(
+                f"model running: {elapsed:.0f}s elapsed, {max(0, timeout - elapsed):.0f}s remaining",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    worker = threading.Thread(target=progress, daemon=True)
+    worker.start()
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=timeout, check=False
+        )
+        for line in result.stderr.splitlines():
+            if line.startswith("llama_perf_"):
+                print(line, file=sys.stderr, flush=True)
+        return result
+    finally:
+        finished.set()
+        worker.join()
+        print(
+            f"model call finished after {time.monotonic() - started:.1f}s",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
 def run_model_reviewer(
     diff: str,
     files: List[str],
@@ -198,8 +236,13 @@ def run_model_reviewer(
     anchors=None,
     *,
     candidate=None,
+    deadline=None,
 ) -> Tuple[str, List[Dict], str]:
     """Execute local llama-cli runner with doc context and diff."""
+    deadline = min(
+        deadline if deadline is not None else float("inf"),
+        time.monotonic() + ASSESSMENT_SECONDS,
+    )
     anchors = list(locations(diff).values()) if anchors is None else anchors
     anchors = [anchor for anchor in anchors if anchor["evidence"].strip()]
     schema = copy.deepcopy(RESPONSE_SCHEMA)
@@ -227,8 +270,10 @@ def run_model_reviewer(
         f"<|im_start|>user\n{content}<|im_end|>\n<|im_start|>assistant\n"
     )
     # UTF-8 byte count conservatively bounds byte-fallback tokens, with room for the template.
-    if len(prompt.encode("utf-8")) + OUTPUT_TOKENS + 256 > CONTEXT_TOKENS:
+    context_tokens = len(prompt.encode("utf-8")) + OUTPUT_TOKENS + 256
+    if context_tokens > CONTEXT_TOKENS:
         return "COMMENT", [], "review incomplete: prompt exceeds the context budget."
+    context_tokens = (context_tokens + 255) // 256 * 256
 
     cmd = [
         str(runner_path),
@@ -241,7 +286,8 @@ def run_model_reviewer(
         "--temp",
         "0",
         "-c",
-        str(CONTEXT_TOKENS),
+        str(context_tokens),
+        "--no-warmup",
         "--no-conversation",
         "--no-display-prompt",
         "--no-context-shift",
@@ -249,8 +295,17 @@ def run_model_reviewer(
         json.dumps(schema),
     ]
 
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return "COMMENT", [], "review incomplete: assessment deadline exhausted."
+    phase = "verification" if candidate is not None else "assessment"
+    print(
+        f"starting {phase}: context={context_tokens}, budget={remaining:.0f}s",
+        file=sys.stderr,
+        flush=True,
+    )
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600, check=False)
+        proc = run_inference(cmd, remaining)
     except (OSError, subprocess.TimeoutExpired):
         return "COMMENT", [], "review incomplete: runner unavailable or timed out."
     if proc.returncode != 0:
@@ -279,6 +334,7 @@ def run_model_reviewer(
             model_path,
             anchors,
             candidate=response["findings"],
+            deadline=deadline,
         )
     if candidate is not None and any(
         item["location"] not in {finding["location"] for finding in candidate} for item in evidence
@@ -303,6 +359,7 @@ def run_model_reviewer(
 
 
 def review_diff(diff, files, runner_path, model_path, *, mock=False):
+    deadline = time.monotonic() + REVIEW_SECONDS
     report = {
         "disposition": "COMMENT",
         "complete": False,
@@ -344,6 +401,7 @@ def review_diff(diff, files, runner_path, model_path, *, mock=False):
             runner_path,
             model_path,
             [a for n, a in anchors.items() if offset <= n < offset + len(chunk.splitlines())],
+            deadline=deadline,
         )
         offset += len(chunk.splitlines())
         completed = not summary.startswith("review incomplete:")
