@@ -37,7 +37,7 @@ class TestAdversarialReviewer(unittest.TestCase):
             report = review_diff(diff, ["tools/test_eval.py", "tools/eval.py"])
         self.assertTrue(report["complete"])
         first = reviewer.call_args_list[0].args
-        self.assertIn(dependency, first[2])
+        self.assertIn(dependency, reviewer.call_args_list[0].kwargs["supporting_context"])
         self.assertNotIn("CASES", first[0])
         self.assertTrue(all(a["file"] == "tools/test_eval.py" for a in first[3]))
 
@@ -47,6 +47,23 @@ class TestAdversarialReviewer(unittest.TestCase):
         chunks = [(f"diff --git a/{p} b/{p}", "+x\n" * SUPPORT_BYTES) for p in files[1:]]
         self.assertEqual(supporting_diffs(header, "+import eval\n", chunks, files), "")
         self.assertEqual(supporting_diffs(header, "+import other\n", chunks, files), "")
+
+    def test_support_never_displaces_primary_diff_or_exceeds_prompt_budget(self):
+        for support, included in (("supporting definition", True), ("x" * 24576, False)):
+            with patch(
+                "adversarial_review.complete",
+                return_value={
+                    "rationale": "reviewed the primary diff",
+                    "findings": [],
+                    "abstention": "",
+                },
+            ) as provider:
+                result = run_model_reviewer("primary diff", [], "", supporting_context=support)
+            self.assertEqual(result[0], "APPROVE")
+            messages = provider.call_args.args[0]
+            self.assertLessEqual(sum(len(m["content"].encode()) for m in messages), 24576)
+            self.assertIn("primary diff", messages[1]["content"])
+            self.assertEqual(support in messages[1]["content"], included)
 
     def test_proposed_findings_require_confirmation(self):
         proposed = {

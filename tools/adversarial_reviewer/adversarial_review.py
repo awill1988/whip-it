@@ -221,6 +221,7 @@ def run_model_reviewer(
     *,
     candidate=None,
     deadline=None,
+    supporting_context="",
 ) -> Tuple[str, List[Dict], str]:
     """Assess supplied diff data through the CI-only Kimi transport."""
     deadline = min(
@@ -251,6 +252,8 @@ def run_model_reviewer(
     system += "\nReturn JSON matching this schema: " + json.dumps(schema)
     if len((system + content).encode("utf-8")) > CONTEXT_TOKENS:
         return "COMMENT", [], "review incomplete: prompt exceeds the context budget."
+    if len((system + content + supporting_context).encode("utf-8")) <= CONTEXT_TOKENS:
+        content += supporting_context
     messages = [{"role": "system", "content": system}, {"role": "user", "content": content}]
     try:
         response = complete(messages, deadline)
@@ -269,6 +272,7 @@ def run_model_reviewer(
             anchors,
             candidate=response["findings"],
             deadline=deadline,
+            supporting_context=supporting_context,
         )
     if candidate is not None and any(
         item["location"] not in {finding["location"] for finding in candidate} for item in evidence
@@ -333,10 +337,10 @@ def review_diff(diff, files, *, mock=False):
         disposition, findings, summary = run_model_reviewer(
             chunk,
             files,
-            f"Current chunk: {header}. Other changed files may contain supporting definitions."
-            + supporting_diffs(header, chunk, chunks, files),
+            f"Current chunk: {header}. Other changed files may contain supporting definitions.",
             [a for n, a in anchors.items() if offset <= n < offset + len(chunk.splitlines())],
             deadline=deadline,
+            supporting_context=supporting_diffs(header, chunk, chunks, files),
         )
         offset += len(chunk.splitlines())
         completed = not summary.startswith("review incomplete:")
