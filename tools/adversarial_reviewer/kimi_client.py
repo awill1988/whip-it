@@ -11,7 +11,8 @@ import urllib.error
 import urllib.request
 
 ENDPOINT = "https://api.moonshot.ai/v1/chat/completions"
-MODEL = "kimi-k2.7-code"
+MODEL = "kimi-k3"
+REASONING_EFFORT = "low"
 OUTPUT_TOKENS = 8192
 CALL_SECONDS = 120
 PROGRESS_SECONDS = 30
@@ -34,6 +35,7 @@ def request(messages):
     body = json.dumps(
         {
             "model": MODEL,
+            "reasoning_effort": REASONING_EFFORT,
             "messages": messages,
             "response_format": {"type": "json_object"},
             "max_tokens": OUTPUT_TOKENS,
@@ -106,11 +108,16 @@ def complete(messages, deadline):
         raise KimiError("assessment deadline exhausted")
     started = time.monotonic()
     finished = threading.Event()
+    print(
+        f"kimi request: model={MODEL} reasoning_effort={REASONING_EFFORT}",
+        file=sys.stderr,
+        flush=True,
+    )
 
     def progress():
         while not finished.wait(PROGRESS_SECONDS):
             print(
-                f"kimi running: {time.monotonic() - started:.0f}s elapsed",
+                f"kimi waiting for completion: {time.monotonic() - started:.0f}s elapsed",
                 file=sys.stderr,
                 flush=True,
             )

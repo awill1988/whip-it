@@ -43,7 +43,8 @@ class TestKimiClient(unittest.TestCase):
         body = json.loads(request.data)
         self.assertEqual(request.full_url, kimi.ENDPOINT)
         self.assertEqual(request.get_header("Authorization"), "Bearer test-key")
-        self.assertEqual(body["model"], "kimi-k2.7-code")
+        self.assertEqual(body["model"], "kimi-k3")
+        self.assertEqual(body["reasoning_effort"], "low")
         self.assertEqual(body["response_format"], {"type": "json_object"})
         self.assertEqual(body["max_tokens"], 8192)
         self.assertNotIn("temperature", body)
@@ -143,7 +144,8 @@ class TestKimiClient(unittest.TestCase):
             self.assertRaisesRegex(kimi.KimiError, "execution deadline"),
         ):
             kimi.complete([], time.monotonic() + 10)
-        self.assertIn("kimi running", logs.getvalue())
+        self.assertIn("model=kimi-k3 reasoning_effort=low", logs.getvalue())
+        self.assertIn("kimi waiting for completion", logs.getvalue())
         self.assertIn("kimi call finished", logs.getvalue())
 
     def test_redirects_are_refused(self):
