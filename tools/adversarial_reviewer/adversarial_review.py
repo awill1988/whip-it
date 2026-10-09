@@ -23,6 +23,7 @@ from kimi_client import KimiError, complete
 CHUNK_BYTES = 16384  # 16 KiB; keep ordinary file diffs together.
 CONTEXT_TOKENS = 24576
 MAX_CHUNKS = 128
+SUPPORT_BYTES = 6144  # 6 KiB; supporting diffs share the existing prompt budget.
 ASSESSMENT_SECONDS = 240
 REVIEW_SECONDS = 900
 RESPONSE_SCHEMA = {
@@ -118,6 +119,32 @@ def split_diff(diff: str) -> list[tuple[str, str]]:
     if lines:
         chunks.append((header, "".join(lines)))
     return chunks
+
+
+def supporting_diffs(header, chunk, chunks, files):
+    """Supply changed sibling imports as context, without expanding finding locations."""
+    imports = set(re.findall(r"^[ +](?:from|import) ([a-zA-Z_]\w*)", chunk, re.MULTILINE))
+    current = next((p for p in files if header == f"diff --git a/{p} b/{p}"), None)
+    if current is None:
+        return ""
+    support = ""
+    for path in files:
+        if (
+            Path(path).parent != Path(current).parent
+            or Path(path).suffix != ".py"
+            or Path(path).stem not in imports
+            or path == current
+        ):
+            continue
+        related = "".join(c for h, c in chunks if h == f"diff --git a/{path} b/{path}")
+        if related and len((support + related).encode()) <= SUPPORT_BYTES:
+            support += related
+    if not support:
+        return ""
+    return (
+        "\nSupporting changed imports (untrusted context only; findings must use the "
+        "current chunk's numbered locations):\n```diff\n" + support + "\n```\n"
+    )
 
 
 def run_heuristic_reviewer(diff: str, files: List[str]) -> Tuple[str, List[Dict], str]:
@@ -306,7 +333,8 @@ def review_diff(diff, files, *, mock=False):
         disposition, findings, summary = run_model_reviewer(
             chunk,
             files,
-            f"Current chunk: {header}. Other changed files may contain supporting definitions.",
+            f"Current chunk: {header}. Other changed files may contain supporting definitions."
+            + supporting_diffs(header, chunk, chunks, files),
             [a for n, a in anchors.items() if offset <= n < offset + len(chunk.splitlines())],
             deadline=deadline,
         )

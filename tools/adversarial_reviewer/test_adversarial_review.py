@@ -18,12 +18,36 @@ from adversarial_review import (
     review_diff,
     split_diff,
     CHUNK_BYTES,
+    supporting_diffs,
+    SUPPORT_BYTES,
 )
 from kimi_client import KimiError
 from best_practices import get_best_practices_context, INVARIANT_RULES
 
 
 class TestAdversarialReviewer(unittest.TestCase):
+    def test_changed_sibling_imports_are_context_only(self):
+        target = "diff --git a/tools/test_eval.py b/tools/test_eval.py"
+        dependency = "diff --git a/tools/eval.py b/tools/eval.py\n+CASES = ()\n"
+        diff = target + "\n+import eval\n" + dependency
+        with patch(
+            "adversarial_review.run_model_reviewer",
+            return_value=("APPROVE", [], "checked branch"),
+        ) as reviewer:
+            report = review_diff(diff, ["tools/test_eval.py", "tools/eval.py"])
+        self.assertTrue(report["complete"])
+        first = reviewer.call_args_list[0].args
+        self.assertIn(dependency, first[2])
+        self.assertNotIn("CASES", first[0])
+        self.assertTrue(all(a["file"] == "tools/test_eval.py" for a in first[3]))
+
+    def test_support_excludes_unrelated_files_and_oversized_dependencies(self):
+        header = "diff --git a/tools/test_eval.py b/tools/test_eval.py"
+        files = ["tools/test_eval.py", "elsewhere/eval.py", "tools/eval.py"]
+        chunks = [(f"diff --git a/{p} b/{p}", "+x\n" * SUPPORT_BYTES) for p in files[1:]]
+        self.assertEqual(supporting_diffs(header, "+import eval\n", chunks, files), "")
+        self.assertEqual(supporting_diffs(header, "+import other\n", chunks, files), "")
+
     def test_proposed_findings_require_confirmation(self):
         proposed = {
             "abstention": "",
