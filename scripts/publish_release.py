@@ -111,7 +111,8 @@ def publish(directory, bootstrap=False):
     assets = sorted(directory.iterdir()) + [Path("install.sh"), Path("install.ps1")]
     # Only draft assets can be replaced during recovery.
     run("gh", "release", "upload", tag, "--clobber", *(str(path) for path in assets))
-    uploaded = api(f"repos/{repository}/releases/tags/{tag}")["assets"]
+    release_id = run("gh", "release", "view", tag, "--json", "databaseId", "--jq", ".databaseId")
+    uploaded = api(f"repos/{repository}/releases/{release_id}")["assets"]
     if {a["name"] for a in uploaded} != {a.name for a in assets}:
         raise ValueError("uploaded release assets differ")
     for asset in assets:
