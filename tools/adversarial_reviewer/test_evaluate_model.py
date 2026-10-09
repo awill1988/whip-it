@@ -11,7 +11,7 @@ import evaluate_model
 class TestModelQualification(unittest.TestCase):
     def test_failed_case_stops_qualification(self):
         with (
-            patch("sys.argv", ["evaluate_model", "--runner", "runner"]),
+            patch("sys.argv", ["evaluate_model"]),
             patch.object(
                 evaluate_model,
                 "run_model_reviewer",
@@ -26,7 +26,7 @@ class TestModelQualification(unittest.TestCase):
 
     def test_all_cases_share_qualification_deadline(self):
         with (
-            patch("sys.argv", ["evaluate_model", "--runner", "runner"]),
+            patch("sys.argv", ["evaluate_model"]),
             patch.object(
                 evaluate_model,
                 "run_model_reviewer",

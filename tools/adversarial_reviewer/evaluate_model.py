@@ -3,10 +3,7 @@
 import argparse
 import json
 import time
-from pathlib import Path
-
-from adversarial_review import DEFAULT_CACHE_DIR, run_model_reviewer
-from fetch_model import load_env
+from adversarial_review import REVIEW_SECONDS, run_model_reviewer
 
 
 CASES = (
@@ -53,12 +50,8 @@ CASES = (
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--runner", type=Path, required=True)
-    parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
-    args = parser.parse_args()
-    config = load_env(Path(__file__).with_name("model.env"))
-    model = args.cache_dir / config["MODEL_NAME"]
-    deadline = time.monotonic() + 1200
+    parser.parse_args()
+    deadline = time.monotonic() + REVIEW_SECONDS
     for index, (name, filename, change, expected) in enumerate(CASES, 1):
         started = time.monotonic()
         print(f"starting case {index}/{len(CASES)}: {name}", flush=True)
@@ -68,9 +61,7 @@ def main():
             f"diff --git a/{filename} b/{filename}\n--- a/{filename}\n+++ b/{filename}\n"
             f"@@ -1,{old_lines} +1,{new_lines} @@\n" + change
         )
-        actual, findings, summary = run_model_reviewer(
-            diff, [filename], "", args.runner, model, deadline=deadline
-        )
+        actual, findings, summary = run_model_reviewer(diff, [filename], "", deadline=deadline)
         valid = actual == expected and not summary.startswith("review incomplete:")
         print(
             json.dumps(

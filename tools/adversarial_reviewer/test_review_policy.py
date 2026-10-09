@@ -37,6 +37,7 @@ const github = {
       get: async () => ({data: {...pr, head: {...pr.head,
         sha: ++gets > 1 && input.superseded ? 'new-head' : pr.head.sha}}}),
       listReviews: () => {},
+      listFiles: () => {},
       createReview: async review => submitted.push(review)
     },
     repos: {getContent: async args => {
@@ -46,7 +47,7 @@ const github = {
         content: Buffer.from(input.owners ?? '* @awill1988').toString('base64')}};
     }}
   },
-  paginate: async () => input.duplicate ? [{
+  paginate: async method => method === github.rest.pulls.listFiles ? (input.files ?? []) : input.duplicate ? [{
     user: {login: 'github-actions[bot]'}, commit_id: 'head', state: 'APPROVED',
     body: '<!-- whip-it-owner-review-exception -->'
   }] : []
@@ -89,6 +90,8 @@ process.env.LINE_THRESHOLD = input.threshold ?? '';
             {"owners": "* @org/team"},
             {"owners": ""},
             {"missing": True, "author": "other"},
+            {"files": [{"filename": "tools/adversarial_reviewer/kimi_client.py"}]},
+            {"files": [{"filename": ".github/workflows/adversarial-review.yml"}]},
         ):
             with self.subTest(case=case):
                 result = self.policy(**case)

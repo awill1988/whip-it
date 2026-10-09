@@ -6,32 +6,25 @@ from __future__ import annotations
 import argparse
 import copy
 import json
-import os
 from pathlib import Path
 import re
 import subprocess
 import sys
-import threading
 import time
 from typing import Dict, List, Tuple
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
-DEFAULT_CACHE_DIR = (
-    Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "adversarial-reviewer"
-)
 
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from evidence import locations, validate as validate_evidence
-from fetch_model import load_env
+from kimi_client import KimiError, complete
 
 CHUNK_BYTES = 16384  # 16 KiB; keep ordinary file diffs together.
 CONTEXT_TOKENS = 24576
-OUTPUT_TOKENS = 1024
 MAX_CHUNKS = 128
-ASSESSMENT_SECONDS = 600
-REVIEW_SECONDS = 1800
-PROGRESS_SECONDS = 30
+ASSESSMENT_SECONDS = 240
+REVIEW_SECONDS = 900
 RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -193,52 +186,16 @@ def run_heuristic_reviewer(diff: str, files: List[str]) -> Tuple[str, List[Dict]
     return disposition, findings, summary
 
 
-def run_inference(command, timeout):
-    """Keep progress visible without exposing prompts or partial model output."""
-    started = time.monotonic()
-    finished = threading.Event()
-
-    def progress():
-        while not finished.wait(PROGRESS_SECONDS):
-            elapsed = time.monotonic() - started
-            print(
-                f"model running: {elapsed:.0f}s elapsed, {max(0, timeout - elapsed):.0f}s remaining",
-                file=sys.stderr,
-                flush=True,
-            )
-
-    worker = threading.Thread(target=progress, daemon=True)
-    worker.start()
-    try:
-        result = subprocess.run(
-            command, capture_output=True, text=True, timeout=timeout, check=False
-        )
-        for line in result.stderr.splitlines():
-            if line.startswith("llama_perf_"):
-                print(line, file=sys.stderr, flush=True)
-        return result
-    finally:
-        finished.set()
-        worker.join()
-        print(
-            f"model call finished after {time.monotonic() - started:.1f}s",
-            file=sys.stderr,
-            flush=True,
-        )
-
-
 def run_model_reviewer(
     diff: str,
     files: List[str],
     doc_context: str,
-    runner_path: Path,
-    model_path: Path,
     anchors=None,
     *,
     candidate=None,
     deadline=None,
 ) -> Tuple[str, List[Dict], str]:
-    """Execute local llama-cli runner with doc context and diff."""
+    """Assess supplied diff data through the CI-only Kimi transport."""
     deadline = min(
         deadline if deadline is not None else float("inf"),
         time.monotonic() + ASSESSMENT_SECONDS,
@@ -263,63 +220,15 @@ def run_model_reviewer(
     )
     if candidate is not None:
         content += f"\nCandidate findings to verify: {json.dumps(candidate)}\n"
-    # Explicit ChatML keeps instruction roles identical across runner versions.
-    content = content.replace("<|im_start|>", "<im_start>").replace("<|im_end|>", "<im_end>")
-    prompt = (
-        f"<|im_start|>system\n{SYSTEM_PROMPT if candidate is None else VERIFICATION_PROMPT}<|im_end|>\n"
-        f"<|im_start|>user\n{content}<|im_end|>\n<|im_start|>assistant\n"
-    )
-    # UTF-8 byte count conservatively bounds byte-fallback tokens, with room for the template.
-    context_tokens = len(prompt.encode("utf-8")) + OUTPUT_TOKENS + 256
-    if context_tokens > CONTEXT_TOKENS:
+    system = SYSTEM_PROMPT if candidate is None else VERIFICATION_PROMPT
+    system += "\nReturn JSON matching this schema: " + json.dumps(schema)
+    if len((system + content).encode("utf-8")) > CONTEXT_TOKENS:
         return "COMMENT", [], "review incomplete: prompt exceeds the context budget."
-    context_tokens = (context_tokens + 255) // 256 * 256
-
-    cmd = [
-        str(runner_path),
-        "-m",
-        str(model_path),
-        "-p",
-        prompt,
-        "-n",
-        str(OUTPUT_TOKENS),
-        "--temp",
-        "0",
-        "-c",
-        str(context_tokens),
-        "--no-warmup",
-        "--no-conversation",
-        "--no-display-prompt",
-        "--no-context-shift",
-        "--json-schema",
-        json.dumps(schema),
-    ]
-
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        return "COMMENT", [], "review incomplete: assessment deadline exhausted."
-    phase = "verification" if candidate is not None else "assessment"
-    print(
-        f"starting {phase}: context={context_tokens}, budget={remaining:.0f}s",
-        file=sys.stderr,
-        flush=True,
-    )
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": content}]
     try:
-        proc = run_inference(cmd, remaining)
-    except (OSError, subprocess.TimeoutExpired):
-        return "COMMENT", [], "review incomplete: runner unavailable or timed out."
-    if proc.returncode != 0:
-        print(f"runner exit {proc.returncode}: {json.dumps(proc.stderr[-2000:])}", file=sys.stderr)
-        return "COMMENT", [], "review incomplete: runner exited unsuccessfully."
-    output = proc.stdout.strip().removesuffix("[end of text]").rstrip()
-    if not output:
-        return "COMMENT", [], "review incomplete: runner returned no output."
-
-    try:
-        response = json.loads(output)
-    except ValueError:
-        print(f"invalid runner output: {json.dumps(output[-2000:])}", file=sys.stderr)
-        return "COMMENT", [], "review incomplete: invalid structured response."
+        response = complete(messages, deadline)
+    except KimiError as error:
+        return "COMMENT", [], f"review incomplete: {error}."
     try:
         disposition, output, evidence = validate_evidence(response, anchors)
     except ValueError as error:
@@ -330,8 +239,6 @@ def run_model_reviewer(
             diff,
             files,
             doc_context,
-            runner_path,
-            model_path,
             anchors,
             candidate=response["findings"],
             deadline=deadline,
@@ -358,7 +265,7 @@ def run_model_reviewer(
     return disposition, findings, output.strip()
 
 
-def review_diff(diff, files, runner_path, model_path, *, mock=False):
+def review_diff(diff, files, *, mock=False):
     deadline = time.monotonic() + REVIEW_SECONDS
     report = {
         "disposition": "COMMENT",
@@ -380,15 +287,17 @@ def review_diff(diff, files, runner_path, model_path, *, mock=False):
     except ValueError as error:
         return {**report, "summary": f"review incomplete: {error}."}
     report["total_chunks"] = len(chunks)
+    if any(not header for header, _ in chunks):
+        return {**report, "summary": "review incomplete: diff is missing file headers."}
     if len(chunks) > MAX_CHUNKS:
         return {**report, "summary": "review incomplete: diff exceeds the chunk budget."}
-    if mock or not runner_path.exists() or not model_path.exists():
+    if mock:
         disposition, findings, summary = run_heuristic_reviewer(diff, files)
         return {
             **report,
             "disposition": disposition,
             "findings": findings,
-            "summary": f"review incomplete: runner not used. {summary}",
+            "summary": f"review incomplete: mock assessment. {summary}",
         }
     anchors = locations(diff)
     offset = 0
@@ -398,8 +307,6 @@ def review_diff(diff, files, runner_path, model_path, *, mock=False):
             chunk,
             files,
             f"Current chunk: {header}. Other changed files may contain supporting definitions.",
-            runner_path,
-            model_path,
             [a for n, a in anchors.items() if offset <= n < offset + len(chunk.splitlines())],
             deadline=deadline,
         )
@@ -485,7 +392,6 @@ def main() -> int:
     parser.add_argument(
         "--fail-on", choices=("request-changes", "comment", "none"), default="request-changes"
     )
-    parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
     parser.add_argument(
         "--mock", action="store_true", help="Force deterministic heuristic reviewer"
     )
@@ -503,13 +409,7 @@ def main() -> int:
     print(
         f"auditing {len(relevant_files)} files and {len(diff.splitlines())} diff lines without truncation."
     )
-    runner_path = args.cache_dir / "llama_runner" / "build" / "bin" / "llama-cli"
-    if not runner_path.exists():
-        runner_path = args.cache_dir / "llama_runner" / "llama-cli"
-
-    model_path = args.cache_dir / load_env(SCRIPT_DIR / "model.env")["MODEL_NAME"]
-
-    report = review_diff(diff, relevant_files, runner_path, model_path, mock=args.mock)
+    report = review_diff(diff, relevant_files, mock=args.mock)
     disposition, findings, summary = report["disposition"], report["findings"], report["summary"]
     duration = time.monotonic() - start_time
     md_summary = format_markdown_summary(disposition, findings, summary, args.target, duration)

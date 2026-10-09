@@ -27,6 +27,7 @@ jobs:
       pull-requests: read
     outputs:
       skip_review: ${{ steps.policy.outputs.skip_review }}
+      qualify: ${{ steps.policy.outputs.qualify }}
     steps:
       - uses: actions/github-script@v7
         id: policy
@@ -35,6 +36,7 @@ jobs:
         with:
           script: &owner_policy |
             core.setOutput('skip_review', 'false');
+            core.setOutput('qualify', String(context.eventName === 'workflow_dispatch'));
             if (!context.payload.pull_request || context.payload.pull_request.draft) return;
             const raw = process.env.LINE_THRESHOLD || '1000';
             if (!/^[0-9]+$/.test(raw)) throw new Error('configure CODEOWNER_REVIEW_LINE_THRESHOLD');
@@ -43,6 +45,14 @@ jobs:
             const params = {...context.repo, pull_number: context.issue.number};
             const {data: pr} = await github.rest.pulls.get(params);
             const changed = pr.additions + pr.deletions;
+            const files = await github.paginate(github.rest.pulls.listFiles, {...params, per_page: 100});
+            const qualifies = files.some(f =>
+              [f.filename, f.previous_filename || ''].some(path =>
+                path.startsWith('tools/adversarial_reviewer/') ||
+                path === '.github/workflows/adversarial-review.yml'));
+            core.setOutput('qualify', String(qualifies));
+            core.notice(`changed lines: ${changed}; threshold: ${threshold}; reviewer changes: ${qualifies}`);
+            if (qualifies) return;
             const owner = pr.base.repo.owner;
             let eligible = pr.state === 'open' && !pr.draft &&
               pr.head.sha === context.payload.pull_request.head.sha &&
@@ -99,7 +109,7 @@ jobs:
       needs.review_policy.outputs.skip_review != 'true' &&
       (github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 35
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -113,40 +123,34 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Restore Model & Runner Cache
-        id: cache-model
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.cache/adversarial-reviewer
-          key: adv-model-v1-${{ hashFiles('tools/adversarial_reviewer/model.env') }}
-
-      - name: Ensure Model & Runner
-        run: python3 tools/adversarial_reviewer/fetch_model.py
-
-      - name: Cache verified reviewer artifacts
-        if: steps.cache-model.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ~/.cache/adversarial-reviewer
-          key: ${{ steps.cache-model.outputs.cache-primary-key }}
-
-      - name: Check reviewer on known changes
+      - name: Check review credentials
+        env:
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+          TRUSTED_SOURCE: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
-          export LD_LIBRARY_PATH="$HOME/.cache/adversarial-reviewer/llama_runner/build/bin:$HOME/.cache/adversarial-reviewer:${LD_LIBRARY_PATH:-}"
-          runner="$HOME/.cache/adversarial-reviewer/llama_runner/build/bin/llama-cli"
-          if [ ! -x "$runner" ]; then
-            runner="$HOME/.cache/adversarial-reviewer/llama_runner/llama-cli"
+          if [ "$TRUSTED_SOURCE" != "true" ]; then
+            echo "::error::kimi review unavailable for fork pull requests; maintainer review is required"
+            exit 1
           fi
-          python3 tools/adversarial_reviewer/evaluate_model.py --runner "$runner"
+          if [ -z "$KIMI_API_KEY" ]; then
+            echo "::error::missing KIMI_API_KEY repository secret"
+            exit 1
+          fi
+
+      - name: Qualify Kimi reviewer
+        if: needs.review_policy.outputs.qualify == 'true'
+        env:
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+        run: python3 tools/adversarial_reviewer/evaluate_model.py
 
       - name: Run Adversarial Code Review
         id: review
         continue-on-error: true
         env:
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
           BASE_REF: ${{ github.event.pull_request.base.sha || inputs.base_ref || 'origin/main' }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          export LD_LIBRARY_PATH="$HOME/.cache/adversarial-reviewer/llama_runner/build/bin:$HOME/.cache/adversarial-reviewer:${LD_LIBRARY_PATH:-}"
           python3 tools/adversarial_reviewer/adversarial_review.py \
             --base "$BASE_REF" \
             --head "$HEAD_SHA" \
@@ -165,7 +169,16 @@ jobs:
 
       - name: Require completed review
         if: steps.review.outcome != 'success'
-        run: exit 1
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path("review-result/report.json")
+          summary = json.loads(path.read_text())["summary"] if path.exists() else "review did not complete; inspect credential and qualification steps"
+          escaped = summary.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error::{escaped}")
+          raise SystemExit(1)
+          PY
 
   publish_review:
     name: Submit pull request review
