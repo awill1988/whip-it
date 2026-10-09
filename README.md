@@ -1,6 +1,6 @@
 # whip-it!
 
-> *“When a problem comes along, you must whip it!”*
+> *"When a problem comes along, you must whip it! When something's going wrong, you must whip it!"*
 
 **Share the skill. Try the plugin. Keep enough budget for the rest of your work.**
 
@@ -34,15 +34,13 @@ cap or guarantee that your subscription lasts a week.
 
 ## Installation
 
-Install from source with Git and a current stable Rust toolchain (Rust 1.89 or
+Install directly from GitHub with Cargo and a current stable Rust toolchain (Rust 1.89 or
 newer). Native builds are checked on macOS, Linux, and Windows, on x64 and ARM64.
 Building requires your platform's linker: Xcode Command Line Tools on macOS,
 a C toolchain on Linux, or Visual Studio C++ Build Tools for Windows MSVC.
 
 ```sh
-git clone https://github.com/awill1988/whip-it.git
-cd whip-it
-cargo install --path . --locked --no-default-features
+cargo install --git https://github.com/awill1988/whip-it.git --locked --no-default-features
 whip-it --version
 ```
 
