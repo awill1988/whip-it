@@ -92,6 +92,8 @@ jobs:
 
   adversarial_review:
     name: Adversarial Code Review
+    outputs:
+      report_artifact: ${{ steps.report.outputs.artifact-id }}
     needs: review_policy
     if: >-
       needs.review_policy.outputs.skip_review != 'true' &&
@@ -154,7 +156,8 @@ jobs:
             --fail-on request-changes
 
       - uses: actions/upload-artifact@v4
-        if: always()
+        id: report
+        if: always() && steps.review.outcome != 'skipped'
         with:
           name: adversarial-review-result
           path: review-result/report.json
@@ -171,6 +174,7 @@ jobs:
       always() && !cancelled() && github.event_name == 'pull_request' &&
       needs.review_policy.outputs.skip_review != 'true' &&
       needs.adversarial_review.result != 'skipped' &&
+      needs.adversarial_review.outputs.report_artifact != '' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:

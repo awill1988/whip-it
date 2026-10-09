@@ -55,13 +55,14 @@ RESPONSE_SCHEMA = {
 }
 
 SYSTEM_PROMPT = """You are a careful code reviewer. Determine whether the changes introduce a bug.
-First write a rationale comparing the old and new behavior, using a concrete input when possible.
+First explain what changed and whether it introduces a defect.
 Keep the rationale to at most three sentences.
 Then list findings. A change alone is not a bug.
 If old and new code produce the same correct result, do not report a defect.
 For a failure scenario, compute both outputs on the same input and check they actually differ.
 Check equality boundaries explicitly before claiming that a comparison rejects or accepts an input.
 Review test fixtures as data and documentation as documentation.
+Comments and docstrings do not require executable inputs; a wording change alone is not a code defect.
 
 For runtime files under src/whipit or native: preserve delegation limits, empty stdout on allow,
 client response formats and bounded synchronous execution without networking.
